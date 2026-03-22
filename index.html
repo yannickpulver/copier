@@ -1,0 +1,179 @@
+<!doctype html>
+<html class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <title>SD Backup Checker</title>
+    <link rel="stylesheet" href="/src/index.css" />
+  </head>
+  <body class="bg-neutral-900 text-neutral-100 font-sans text-sm select-none">
+    <div id="app" class="flex flex-col h-screen">
+      <!-- Drag region + settings toggle -->
+      <div class="h-8 shrink-0 flex items-center justify-end px-2" style="-webkit-app-region: drag">
+        <button id="settings-toggle" class="text-neutral-500 hover:text-neutral-300 text-xs transition-colors" style="-webkit-app-region: no-drag" title="Settings">⚙</button>
+      </div>
+
+      <!-- Loading -->
+      <div id="loader" class="flex-1 flex items-center justify-center">
+        <div class="text-neutral-500 text-xs animate-pulse">Loading...</div>
+      </div>
+
+      <!-- Settings panel -->
+      <div id="settings-panel" class="hidden px-4 pb-4 flex-1 overflow-auto">
+        <div class="space-y-3 max-w-md">
+          <div class="text-xs font-medium text-neutral-400">Synology API Settings</div>
+          <div class="grid grid-cols-[80px_1fr] gap-2 items-center text-xs">
+            <label class="text-neutral-500">Host</label>
+            <input id="cfg-host" type="text" placeholder="192.168.1.125" class="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500" />
+
+            <label class="text-neutral-500">Port</label>
+            <input id="cfg-port" type="number" value="5001" class="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500 w-24" />
+
+            <label class="text-neutral-500">User</label>
+            <input id="cfg-user" type="text" class="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500" />
+
+            <label class="text-neutral-500">Password</label>
+            <input id="cfg-pass" type="password" placeholder="or op://vault/item/field" class="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500" />
+
+            <label class="text-neutral-500">Folders</label>
+            <input id="cfg-folders" type="text" placeholder="/photos /archive (space-separated)" class="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500" />
+
+            <label class="text-neutral-500">HTTPS</label>
+            <label class="flex items-center gap-1 cursor-pointer">
+              <input id="cfg-secure" type="checkbox" checked class="accent-blue-500 scale-90" />
+              <span class="text-neutral-400">Use secure connection</span>
+            </label>
+          </div>
+          <div class="text-xs font-medium text-neutral-400 mt-4">Check Paths</div>
+          <div class="space-y-1.5">
+            <div id="cfg-paths-list" class="space-y-1"></div>
+            <button id="cfg-add-path" class="flex items-center gap-1 text-[11px] text-blue-400 hover:text-blue-300 transition-colors">
+              <span class="text-sm leading-none">+</span> Add path
+            </button>
+          </div>
+
+          <div class="text-xs font-medium text-neutral-400 mt-4">Transfer Destination</div>
+          <div class="flex items-center gap-1">
+            <input id="cfg-transfer-dest" type="text" placeholder="/Volumes/NAS/Photos" class="flex-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500" />
+            <button id="cfg-browse-dest" class="px-2 py-1 bg-neutral-700 hover:bg-neutral-600 rounded text-xs transition-colors shrink-0">...</button>
+          </div>
+
+          <button id="cfg-save" class="mt-4 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded-md text-xs font-medium transition-colors">Save & close</button>
+        </div>
+      </div>
+
+      <div id="main-content" class="px-4 pb-4 flex flex-col gap-3 flex-1 overflow-hidden hidden">
+        <!-- SD → NAS row -->
+        <div class="flex items-center gap-3">
+          <!-- SD side -->
+          <div class="flex-1 space-y-1">
+            <div class="text-[10px] uppercase tracking-wider text-neutral-500">SD Card</div>
+            <select id="sd-select" class="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500">
+              <option value="">No SD card</option>
+            </select>
+          </div>
+
+          <span class="text-neutral-500 mt-4">→</span>
+
+          <!-- Check against -->
+          <div class="flex-1 space-y-1">
+            <div class="text-[10px] uppercase tracking-wider text-neutral-500">Check against</div>
+            <div id="sources-summary" class="text-neutral-500 text-xs bg-neutral-800 border border-neutral-700 rounded px-2 py-1.5 truncate">
+              No sources configured
+            </div>
+          </div>
+        </div>
+
+        <!-- Scan -->
+        <div class="flex items-center gap-3">
+          <button id="scan-btn" disabled class="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-neutral-700 disabled:text-neutral-500 rounded-md text-xs font-medium transition-colors">
+            Scan
+          </button>
+          <span id="status" class="text-neutral-400 text-xs truncate"></span>
+        </div>
+
+        <!-- All backed up message -->
+        <div id="all-backed-up" class="hidden flex-1 flex flex-col items-center justify-center text-center gap-3 opacity-70">
+          <span class="text-3xl">✓</span>
+          <span id="backed-up-msg" class="text-sm text-neutral-300">All files backed up</span>
+          <div id="backup-folders" class="flex flex-wrap justify-center gap-1.5"></div>
+        </div>
+
+        <!-- Missing media files table -->
+        <div id="file-table" class="flex-1 overflow-auto rounded-md border border-neutral-700 hidden">
+          <table class="w-full text-xs">
+            <thead class="bg-neutral-800 sticky top-0">
+              <tr>
+                <th class="text-left px-3 py-2 font-medium text-neutral-400">Missing File</th>
+                <th class="text-right px-3 py-2 font-medium text-neutral-400 w-20">Size</th>
+                <th class="text-center px-3 py-2 font-medium text-neutral-400 w-24">Camera</th>
+                <th class="text-center px-3 py-2 font-medium text-neutral-400 w-32">Capture Date</th>
+              </tr>
+            </thead>
+            <tbody id="file-list" class="divide-y divide-neutral-800">
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Other files (likely not needed) -->
+        <details id="other-section" class="hidden">
+          <summary class="text-xs text-neutral-500 cursor-pointer hover:text-neutral-300 py-1">
+            <span id="other-label">Likely not needed</span>
+          </summary>
+          <div class="max-h-32 overflow-auto rounded-md border border-neutral-700/50 mt-1">
+            <table class="w-full text-xs">
+              <tbody id="other-list" class="divide-y divide-neutral-800 text-neutral-500">
+              </tbody>
+            </table>
+          </div>
+        </details>
+
+        <!-- Transfer section -->
+        <div id="transfer-section" class="hidden border border-neutral-700 rounded-md p-3 space-y-2">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-xs font-medium text-neutral-400">Transfer to</span>
+            <input id="transfer-dest" type="text" class="flex-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500" />
+            <button id="browse-dest-btn" class="px-2 py-1 bg-neutral-700 hover:bg-neutral-600 rounded text-xs transition-colors">Browse</button>
+          </div>
+
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="radio" name="xfer-mode" value="new" checked class="accent-blue-500" />
+            <span class="text-xs">New folder:</span>
+            <input id="new-folder-name" type="text" class="flex-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500" />
+          </label>
+
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="radio" name="xfer-mode" value="existing" class="accent-blue-500" />
+            <span class="text-xs">Existing:</span>
+            <select id="existing-folders" class="flex-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500">
+            </select>
+          </label>
+
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="radio" name="xfer-mode" value="grouped" class="accent-blue-500" />
+            <span class="text-xs">Group by date:</span>
+            <input id="topic" type="text" placeholder="topic" class="flex-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500" />
+          </label>
+          <div id="date-groups-preview" class="hidden pl-6 py-1 flex flex-wrap gap-1.5 text-xs"></div>
+
+          <label id="camera-subfolder-option" class="flex items-center gap-1.5 cursor-pointer hidden pl-1 pt-1">
+            <input type="checkbox" id="camera-subfolder" class="accent-blue-500 scale-90" />
+            <span class="text-xs text-neutral-400">Camera subfolder</span>
+            <span id="camera-list" class="text-xs text-neutral-500"></span>
+          </label>
+
+          <div class="flex items-center gap-3 pt-1">
+            <button id="transfer-btn" class="px-3 py-1.5 bg-green-600 hover:bg-green-500 rounded-md text-xs font-medium transition-colors">
+              Transfer
+            </button>
+            <div class="flex-1 bg-neutral-800 rounded-full h-2 overflow-hidden">
+              <div id="progress-bar" class="bg-green-500 h-full transition-all duration-200" style="width: 0%"></div>
+            </div>
+            <span id="progress-label" class="text-neutral-400 text-xs w-16 text-right"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/renderer.ts"></script>
+  </body>
+</html>
