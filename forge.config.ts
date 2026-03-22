@@ -11,12 +11,14 @@ import { PublisherGithub } from '@electron-forge/publisher-github';
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
-    osxSign: {},
-    osxNotarize: {
-      appleId: process.env.APPLE_ID!,
-      appleIdPassword: process.env.APPLE_APP_PASSWORD!,
-      teamId: process.env.APPLE_TEAM_ID!,
-    },
+    ...(process.env.APPLE_ID ? {
+      osxSign: {},
+      osxNotarize: {
+        appleId: process.env.APPLE_ID,
+        appleIdPassword: process.env.APPLE_APP_PASSWORD!,
+        teamId: process.env.APPLE_TEAM_ID!,
+      },
+    } : {}),
   },
   rebuildConfig: {},
   makers: [
