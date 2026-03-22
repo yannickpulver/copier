@@ -31,7 +31,7 @@ const sdSelect = $<HTMLSelectElement>('#sd-select');
 const sourcesSummary = $('#sources-summary');
 const scanBtn = $<HTMLButtonElement>('#scan-btn');
 const status = $('#status');
-const fileList = $<HTMLTableSectionElement>('#file-list');
+const fileList = $<HTMLDivElement>('#file-list');
 const transferSection = $('#transfer-section');
 const newFolderInput = $<HTMLInputElement>('#new-folder-name');
 const existingSelect = $<HTMLSelectElement>('#existing-folders');
@@ -232,14 +232,43 @@ scanBtn.addEventListener('click', async () => {
       fileTable.classList.remove('hidden');
     }
 
-    fileList.innerHTML = media.map((f: any) => `
-      <tr class="hover:bg-neutral-800/50 cursor-pointer" data-path="${escapeHtml(f.fullPath)}">
-        <td class="px-3 py-1.5">${escapeHtml(f.name)}</td>
-        <td class="px-3 py-1.5 text-right text-neutral-400">${formatSize(f.size)}</td>
-        <td class="px-3 py-1.5 text-center text-neutral-400 truncate">${f.camera ? escapeHtml(f.camera) : '—'}</td>
-        <td class="px-3 py-1.5 text-center text-neutral-400">${f.captureDate ? formatDate(f.captureDate) : '—'}</td>
-      </tr>
-    `).join('');
+    // Group by day
+    const byDay = new Map<string, typeof media>();
+    for (const f of media) {
+      const day = f.captureDate
+        ? new Date(f.captureDate).toISOString().slice(0, 10)
+        : 'unknown';
+      const arr = byDay.get(day);
+      if (arr) arr.push(f);
+      else byDay.set(day, [f]);
+    }
+    const sortedDays = [...byDay.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+
+    fileList.innerHTML = sortedDays.map(([day, files]) => {
+      const label = day === 'unknown' ? 'Unknown date' : day.replace(/-/g, '.');
+      const totalSize = files.reduce((s, f) => s + f.size, 0);
+      return `
+        <details class="border border-neutral-700 rounded-md overflow-hidden">
+          <summary class="flex items-center gap-3 px-3 py-2 bg-neutral-800/50 hover:bg-neutral-800 cursor-pointer text-xs">
+            <span class="font-medium text-neutral-300">${label}</span>
+            <span class="text-neutral-500">${files.length} file${files.length > 1 ? 's' : ''}</span>
+            <span class="text-neutral-500 ml-auto">${formatSize(totalSize)}</span>
+          </summary>
+          <table class="w-full text-xs">
+            <tbody class="divide-y divide-neutral-800">
+              ${files.map((f: any) => `
+                <tr class="hover:bg-neutral-800/50 cursor-pointer" data-path="${escapeHtml(f.fullPath)}">
+                  <td class="px-3 py-1.5">${escapeHtml(f.name)}</td>
+                  <td class="px-3 py-1.5 text-right text-neutral-400 w-16">${formatSize(f.size)}</td>
+                  <td class="px-3 py-1.5 text-center text-neutral-400 w-20 truncate">${f.camera ? escapeHtml(f.camera) : ''}</td>
+                  <td class="px-3 py-1.5 text-right text-neutral-500 w-12 text-[10px]">${f.captureDate ? formatTime(f.captureDate) : ''}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </details>
+      `;
+    }).join('');
 
     // Click to reveal in Finder
     fileList.addEventListener('click', (e) => {
@@ -437,6 +466,11 @@ function formatSize(bytes: number): string {
 function formatDate(iso: string): string {
   const d = new Date(iso);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+function formatTime(iso: string): string {
+  const d = new Date(iso);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
 function escapeHtml(s: string): string {

@@ -137,20 +137,9 @@
           <div id="backup-folders" class="flex flex-wrap justify-center gap-1.5"></div>
         </div>
 
-        <!-- Missing media files table -->
-        <div id="file-table" class="flex-1 overflow-auto rounded-md border border-neutral-700 hidden">
-          <table class="w-full text-xs">
-            <thead class="bg-neutral-800 sticky top-0">
-              <tr>
-                <th class="text-left px-3 py-2 font-medium text-neutral-400">Missing File</th>
-                <th class="text-right px-3 py-2 font-medium text-neutral-400 w-20">Size</th>
-                <th class="text-center px-3 py-2 font-medium text-neutral-400 w-24">Camera</th>
-                <th class="text-center px-3 py-2 font-medium text-neutral-400 w-32">Capture Date</th>
-              </tr>
-            </thead>
-            <tbody id="file-list" class="divide-y divide-neutral-800">
-            </tbody>
-          </table>
+        <!-- Missing media files grouped by day -->
+        <div id="file-table" class="flex-1 overflow-auto hidden">
+          <div id="file-list" class="space-y-1"></div>
         </div>
 
         <!-- Other files (likely not needed) -->
