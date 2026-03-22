@@ -5,7 +5,7 @@ declare global {
     api: {
       listSdCards: () => Promise<{ name: string; path: string }[]>;
       loadSynologyConfig: () => Promise<{ available: boolean; folders: string[] }>;
-      scan: (sdPath: string) => Promise<{
+      scan: (sdPath: string, skipCheck?: boolean) => Promise<{
         total: number;
         backedUp: number;
         missing: { name: string; size: number; fullPath: string; captureDate?: string; isMedia?: boolean }[];
@@ -37,7 +37,7 @@ const newFolderInput = $<HTMLInputElement>('#new-folder-name');
 const existingSelect = $<HTMLSelectElement>('#existing-folders');
 const topicInput = $<HTMLInputElement>('#topic');
 const dateGroupsPreview = $('#date-groups-preview');
-const transferDest = $<HTMLInputElement>('#transfer-dest');
+const transferDest = $<HTMLSelectElement>('#transfer-dest');
 const browseDestBtn = $('#browse-dest-btn');
 const transferBtn = $<HTMLButtonElement>('#transfer-btn');
 const progressBar = $<HTMLDivElement>('#progress-bar');
@@ -73,17 +73,32 @@ function normalizeCheckPaths(raw: any): { path: string; fallbackOnly?: boolean }
 
 // --- Init ---
 
+let transferDests: string[] = [];
+
+function populateTransferDests() {
+  transferDest.innerHTML = transferDests.length
+    ? transferDests.map((d) => `<option value="${escapeHtml(d)}">${escapeHtml(d.split('/').pop() ?? d)}</option>`).join('')
+    : '<option value="">No destinations — open ⚙</option>';
+}
+
 async function init() {
-  const [config, savedTransferDest, rawCheckPaths] = await Promise.all([
+  const [config, savedDests, oldDest, rawCheckPaths] = await Promise.all([
     window.api.loadSynologyConfig(),
+    window.api.getSetting('transferDests'),
     window.api.getSetting('transferDest'),
     window.api.getSetting('checkPaths'),
     refreshSdCards(),
   ]);
 
+  // Migrate old single dest to array
+  transferDests = savedDests ?? (oldDest ? [oldDest] : []);
+  if (!savedDests && oldDest) {
+    window.api.setSetting('transferDests', transferDests);
+  }
+  populateTransferDests();
+
   const savedCheckPaths = normalizeCheckPaths(rawCheckPaths);
   updateSourcesSummary(config.available, savedCheckPaths);
-  if (savedTransferDest) transferDest.value = savedTransferDest;
 
   document.getElementById('loader')!.classList.add('hidden');
   document.getElementById('main-content')!.classList.remove('hidden');
@@ -111,16 +126,17 @@ async function refreshSdCards() {
 }
 
 browseDestBtn.addEventListener('click', async () => {
-  const path = await window.api.browseFolder(transferDest.value);
-  if (path) {
+  const path = await window.api.browseFolder(transferDest.value || undefined);
+  if (path && !transferDests.includes(path)) {
+    transferDests.push(path);
+    window.api.setSetting('transferDests', transferDests);
+    populateTransferDests();
     transferDest.value = path;
-    window.api.setSetting('transferDest', path);
     await refreshExistingFolders();
   }
 });
 
 transferDest.addEventListener('change', async () => {
-  window.api.setSetting('transferDest', transferDest.value);
   await refreshExistingFolders();
 });
 
@@ -153,9 +169,10 @@ scanBtn.addEventListener('click', async () => {
   const sdPath = sdSelect.value;
   if (!sdPath) return;
 
+  const skipCheck = $<HTMLInputElement>('#skip-check').checked;
 
   scanBtn.disabled = true;
-  status.textContent = 'Starting scan...';
+  status.textContent = skipCheck ? 'Scanning files...' : 'Starting scan...';
   fileList.innerHTML = '';
   otherList.innerHTML = '';
   allBackedUp.classList.add('hidden');
@@ -164,7 +181,7 @@ scanBtn.addEventListener('click', async () => {
   transferSection.classList.add('hidden');
 
   try {
-    const result = await window.api.scan(sdPath);
+    const result = await window.api.scan(sdPath, skipCheck);
 
     const media = result.missing.filter((f) => f.isMedia !== false);
     const other = result.missing.filter((f) => f.isMedia === false);
@@ -439,16 +456,48 @@ const cfgFolders = $<HTMLInputElement>('#cfg-folders');
 const cfgSecure = $<HTMLInputElement>('#cfg-secure');
 const cfgSave = document.getElementById('cfg-save')!;
 
+// Card expand/collapse
+document.querySelectorAll<HTMLButtonElement>('.settings-card-header').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const card = btn.dataset.card!;
+    const detail = document.getElementById(`card-${card}-detail`)!;
+    const isOpen = !detail.classList.contains('hidden');
+    // Collapse all
+    document.querySelectorAll('[id^="card-"][id$="-detail"]').forEach((d) => d.classList.add('hidden'));
+    if (!isOpen) detail.classList.remove('hidden');
+  });
+});
+
+function updateCardSummaries(host: string, folders: string) {
+  const synoOk = !!(host);
+  document.getElementById('card-synology-dot')!.className =
+    `w-2 h-2 rounded-full shrink-0 ${synoOk ? 'bg-green-500' : 'bg-neutral-600'}`;
+  document.getElementById('card-synology-summary')!.textContent =
+    synoOk ? `${host} (${folders || 'no folders'})` : 'Not configured';
+
+  const pathCount = currentCheckPaths.length;
+  document.getElementById('card-paths-dot')!.className =
+    `w-2 h-2 rounded-full shrink-0 ${pathCount > 0 ? 'bg-green-500' : 'bg-neutral-600'}`;
+  document.getElementById('card-paths-summary')!.textContent =
+    pathCount > 0 ? `${pathCount} path${pathCount > 1 ? 's' : ''}` : 'No paths configured';
+
+  const destCount = currentTransferDests.length;
+  document.getElementById('card-dests-dot')!.className =
+    `w-2 h-2 rounded-full shrink-0 ${destCount > 0 ? 'bg-green-500' : 'bg-neutral-600'}`;
+  document.getElementById('card-dests-summary')!.textContent =
+    destCount > 0 ? currentTransferDests.map((d) => d.split('/').pop()).join(', ') : 'No destinations';
+}
+
 settingsToggle.addEventListener('click', async () => {
   const isOpen = !settingsPanel.classList.contains('hidden');
   if (isOpen) {
     settingsPanel.classList.add('hidden');
     mainContent.classList.remove('hidden');
   } else {
-    const cfgTransferDest = $<HTMLInputElement>('#cfg-transfer-dest');
     const cfgPathsList = document.getElementById('cfg-paths-list')!;
+    const cfgDestsList = document.getElementById('cfg-dests-list')!;
 
-    const [host, port, user, pass, folders, secure, checkPaths, xferDest] = await Promise.all([
+    const [host, port, user, pass, folders, secure, checkPaths, savedDests] = await Promise.all([
       window.api.getSetting('synologyHost'),
       window.api.getSetting('synologyPort'),
       window.api.getSetting('synologyUser'),
@@ -456,7 +505,7 @@ settingsToggle.addEventListener('click', async () => {
       window.api.getSetting('synologyFolders'),
       window.api.getSetting('synologySecure'),
       window.api.getSetting('checkPaths'),
-      window.api.getSetting('transferDest'),
+      window.api.getSetting('transferDests'),
     ]);
     cfgHost.value = host ?? '';
     cfgPort.value = String(port ?? 5001);
@@ -464,11 +513,17 @@ settingsToggle.addEventListener('click', async () => {
     cfgPass.value = pass ?? '';
     cfgFolders.value = folders ?? '';
     cfgSecure.checked = secure ?? true;
-    cfgTransferDest.value = xferDest ?? '';
 
-    // Render path chips
     currentCheckPaths = normalizeCheckPaths(checkPaths);
     renderPathChips(cfgPathsList);
+
+    currentTransferDests = savedDests ?? [...transferDests];
+    renderDestChips(cfgDestsList);
+
+    // Collapse all detail sections
+    document.querySelectorAll('[id^="card-"][id$="-detail"]').forEach((d) => d.classList.add('hidden'));
+
+    updateCardSummaries(host ?? '', folders ?? '');
 
     mainContent.classList.add('hidden');
     settingsPanel.classList.remove('hidden');
@@ -476,6 +531,7 @@ settingsToggle.addEventListener('click', async () => {
 });
 
 let currentCheckPaths: { path: string; fallbackOnly?: boolean }[] = [];
+let currentTransferDests: string[] = [];
 
 function renderPathChips(container: HTMLElement) {
   container.innerHTML = currentCheckPaths.map((cp, i) => `
@@ -503,6 +559,22 @@ function renderPathChips(container: HTMLElement) {
   });
 }
 
+function renderDestChips(container: HTMLElement) {
+  container.innerHTML = currentTransferDests.map((d, i) => `
+    <div class="flex items-center gap-1.5">
+      <span class="flex-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-neutral-300 truncate">${escapeHtml(d)}</span>
+      <button data-remove-dest="${i}" class="text-neutral-600 hover:text-red-400 text-sm leading-none transition-colors px-1">×</button>
+    </div>
+  `).join('');
+
+  container.querySelectorAll<HTMLButtonElement>('[data-remove-dest]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      currentTransferDests.splice(parseInt(btn.dataset.removeDest!), 1);
+      renderDestChips(container);
+    });
+  });
+}
+
 document.getElementById('cfg-add-path')!.addEventListener('click', async () => {
   const path = await window.api.browseFolder();
   if (path && !currentCheckPaths.some((cp) => cp.path === path)) {
@@ -511,15 +583,15 @@ document.getElementById('cfg-add-path')!.addEventListener('click', async () => {
   }
 });
 
-document.getElementById('cfg-browse-dest')!.addEventListener('click', async () => {
-  const cfgTransferDest = $<HTMLInputElement>('#cfg-transfer-dest');
-  const path = await window.api.browseFolder(cfgTransferDest.value);
-  if (path) cfgTransferDest.value = path;
+document.getElementById('cfg-add-dest')!.addEventListener('click', async () => {
+  const path = await window.api.browseFolder();
+  if (path && !currentTransferDests.includes(path)) {
+    currentTransferDests.push(path);
+    renderDestChips(document.getElementById('cfg-dests-list')!);
+  }
 });
 
 cfgSave.addEventListener('click', async () => {
-  const cfgTransferDest = $<HTMLInputElement>('#cfg-transfer-dest');
-
   await Promise.all([
     window.api.setSetting('synologyHost', cfgHost.value || undefined),
     window.api.setSetting('synologyPort', cfgPort.value ? parseInt(cfgPort.value) : undefined),
@@ -528,10 +600,12 @@ cfgSave.addEventListener('click', async () => {
     window.api.setSetting('synologyFolders', cfgFolders.value || undefined),
     window.api.setSetting('synologySecure', cfgSecure.checked),
     window.api.setSetting('checkPaths', currentCheckPaths.length ? currentCheckPaths as any : undefined),
-    window.api.setSetting('transferDest', cfgTransferDest.value || undefined),
+    window.api.setSetting('transferDests', currentTransferDests.length ? currentTransferDests : undefined),
   ]);
 
-  if (cfgTransferDest.value) transferDest.value = cfgTransferDest.value;
+  // Sync transfer dests to main screen
+  transferDests = [...currentTransferDests];
+  populateTransferDests();
 
   settingsPanel.classList.add('hidden');
   mainContent.classList.remove('hidden');

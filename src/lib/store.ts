@@ -5,6 +5,7 @@ import { app } from 'electron';
 interface AppSettings {
   checkPaths?: { path: string; fallbackOnly?: boolean }[];
   transferDest?: string;
+  transferDests?: string[];
   synologyHost?: string;
   synologyPort?: number;
   synologyUser?: string;

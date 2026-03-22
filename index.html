@@ -18,46 +18,81 @@
       </div>
 
       <!-- Settings panel -->
-      <div id="settings-panel" class="hidden px-4 pb-4 flex-1 overflow-auto">
-        <div class="space-y-3 max-w-md">
-          <div class="text-xs font-medium text-neutral-400">Synology API Settings</div>
-          <div class="grid grid-cols-[80px_1fr] gap-2 items-center text-xs">
-            <label class="text-neutral-500">Host</label>
-            <input id="cfg-host" type="text" placeholder="192.168.1.125" class="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500" />
+      <div id="settings-panel" class="hidden px-4 pb-4 flex-1 overflow-auto flex justify-center">
+        <div class="space-y-2 max-w-md w-full">
 
-            <label class="text-neutral-500">Port</label>
-            <input id="cfg-port" type="number" value="5001" class="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500 w-24" />
-
-            <label class="text-neutral-500">User</label>
-            <input id="cfg-user" type="text" class="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500" />
-
-            <label class="text-neutral-500">Password</label>
-            <input id="cfg-pass" type="password" placeholder="or op://vault/item/field" class="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500" />
-
-            <label class="text-neutral-500">Folders</label>
-            <input id="cfg-folders" type="text" placeholder="/photos /archive (space-separated)" class="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500" />
-
-            <label class="text-neutral-500">HTTPS</label>
-            <label class="flex items-center gap-1 cursor-pointer">
-              <input id="cfg-secure" type="checkbox" checked class="accent-blue-500 scale-90" />
-              <span class="text-neutral-400">Use secure connection</span>
-            </label>
-          </div>
-          <div class="text-xs font-medium text-neutral-400 mt-4">Check Paths</div>
-          <div class="space-y-1.5">
-            <div id="cfg-paths-list" class="space-y-1"></div>
-            <button id="cfg-add-path" class="flex items-center gap-1 text-[11px] text-blue-400 hover:text-blue-300 transition-colors">
-              <span class="text-sm leading-none">+</span> Add path
+          <!-- Synology Card -->
+          <div class="border border-neutral-700 rounded-lg overflow-hidden">
+            <button class="settings-card-header w-full flex items-center gap-3 px-3 py-2.5 hover:bg-neutral-800/50 transition-colors" data-card="synology">
+              <div class="flex-1 text-left">
+                <div class="text-xs font-medium text-neutral-300">Synology API</div>
+                <div id="card-synology-summary" class="text-[10px] text-neutral-500">Not configured</div>
+              </div>
+              <span id="card-synology-dot" class="w-2 h-2 rounded-full bg-neutral-600 shrink-0"></span>
             </button>
+            <div id="card-synology-detail" class="hidden px-3 pb-3 pt-2 border-t border-neutral-700/50">
+              <p class="text-[10px] text-neutral-500 mb-2">Connect to your Synology NAS via API to check if files are already backed up. Faster than local path scanning for remote NAS.</p>
+              <div class="grid grid-cols-[80px_1fr] gap-2 items-center text-xs">
+                <label class="text-neutral-500">Host</label>
+                <input id="cfg-host" type="text" placeholder="192.168.1.125" class="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500" />
+                <label class="text-neutral-500">Port</label>
+                <input id="cfg-port" type="number" value="5001" class="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500 w-24" />
+                <label class="text-neutral-500">User</label>
+                <input id="cfg-user" type="text" class="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500" />
+                <label class="text-neutral-500">Password</label>
+                <input id="cfg-pass" type="password" placeholder="or op://vault/item/field" class="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500" />
+                <label class="text-neutral-500">Folders</label>
+                <input id="cfg-folders" type="text" placeholder="/photos /archive (space-separated)" class="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500" />
+                <label class="text-neutral-500">HTTPS</label>
+                <label class="flex items-center gap-1 cursor-pointer">
+                  <input id="cfg-secure" type="checkbox" checked class="accent-blue-500 scale-90" />
+                  <span class="text-neutral-400">Use secure connection</span>
+                </label>
+              </div>
+            </div>
           </div>
 
-          <div class="text-xs font-medium text-neutral-400 mt-4">Transfer Destination</div>
-          <div class="flex items-center gap-1">
-            <input id="cfg-transfer-dest" type="text" placeholder="/Volumes/NAS/Photos" class="flex-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500" />
-            <button id="cfg-browse-dest" class="px-2 py-1 bg-neutral-700 hover:bg-neutral-600 rounded text-xs transition-colors shrink-0">...</button>
+          <!-- Check Paths Card -->
+          <div class="border border-neutral-700 rounded-lg overflow-hidden">
+            <button class="settings-card-header w-full flex items-center gap-3 px-3 py-2.5 hover:bg-neutral-800/50 transition-colors" data-card="paths">
+              <div class="flex-1 text-left">
+                <div class="text-xs font-medium text-neutral-300">Check Paths</div>
+                <div id="card-paths-summary" class="text-[10px] text-neutral-500">No paths configured</div>
+              </div>
+              <span id="card-paths-dot" class="w-2 h-2 rounded-full bg-neutral-600 shrink-0"></span>
+            </button>
+            <div id="card-paths-detail" class="hidden px-3 pb-3 pt-2 border-t border-neutral-700/50">
+              <p class="text-[10px] text-neutral-500 mb-2">Local or mounted folders to scan for existing backups. SD card files found here are marked as backed up.</p>
+              <div class="space-y-1.5">
+                <div id="cfg-paths-list" class="space-y-1"></div>
+                <button id="cfg-add-path" class="flex items-center gap-1 text-[11px] text-blue-400 hover:text-blue-300 transition-colors">
+                  <span class="text-sm leading-none">+</span> Add path
+                </button>
+              </div>
+            </div>
           </div>
 
-          <button id="cfg-save" class="mt-4 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded-md text-xs font-medium transition-colors">Save & close</button>
+          <!-- Transfer Destinations Card -->
+          <div class="border border-neutral-700 rounded-lg overflow-hidden">
+            <button class="settings-card-header w-full flex items-center gap-3 px-3 py-2.5 hover:bg-neutral-800/50 transition-colors" data-card="dests">
+              <div class="flex-1 text-left">
+                <div class="text-xs font-medium text-neutral-300">Transfer Destinations</div>
+                <div id="card-dests-summary" class="text-[10px] text-neutral-500">No destinations</div>
+              </div>
+              <span id="card-dests-dot" class="w-2 h-2 rounded-full bg-neutral-600 shrink-0"></span>
+            </button>
+            <div id="card-dests-detail" class="hidden px-3 pb-3 pt-2 border-t border-neutral-700/50">
+              <p class="text-[10px] text-neutral-500 mb-2">Where to copy new files. Add multiple destinations and choose one at transfer time.</p>
+              <div class="space-y-1.5">
+                <div id="cfg-dests-list" class="space-y-1"></div>
+                <button id="cfg-add-dest" class="flex items-center gap-1 text-[11px] text-blue-400 hover:text-blue-300 transition-colors">
+                  <span class="text-sm leading-none">+</span> Add destination
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <button id="cfg-save" class="mt-3 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded-md text-xs font-medium transition-colors w-full">Save & close</button>
         </div>
       </div>
 
@@ -88,6 +123,10 @@
           <button id="scan-btn" disabled class="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-neutral-700 disabled:text-neutral-500 rounded-md text-xs font-medium transition-colors">
             Scan
           </button>
+          <label class="flex items-center gap-1.5 cursor-pointer shrink-0">
+            <input type="checkbox" id="skip-check" class="accent-blue-500 scale-90" />
+            <span class="text-[11px] text-neutral-500">Copy all</span>
+          </label>
           <span id="status" class="text-neutral-400 text-xs truncate"></span>
         </div>
 
@@ -131,8 +170,9 @@
         <div id="transfer-section" class="hidden border border-neutral-700 rounded-md p-3 space-y-2">
           <div class="flex items-center gap-2 mb-2">
             <span class="text-xs font-medium text-neutral-400">Transfer to</span>
-            <input id="transfer-dest" type="text" class="flex-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500" />
-            <button id="browse-dest-btn" class="px-2 py-1 bg-neutral-700 hover:bg-neutral-600 rounded text-xs transition-colors">Browse</button>
+            <select id="transfer-dest" class="flex-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500">
+            </select>
+            <button id="browse-dest-btn" class="px-2 py-1 bg-neutral-700 hover:bg-neutral-600 rounded text-xs transition-colors shrink-0" title="Add destination">+</button>
           </div>
 
           <label class="flex items-center gap-2 cursor-pointer">

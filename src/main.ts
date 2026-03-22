@@ -58,13 +58,31 @@ ipcMain.handle('load-synology-config', async () => {
   return { available: false, folders: [] };
 });
 
-ipcMain.handle('scan', async (_event, sdPath: string) => {
+ipcMain.handle('scan', async (_event, sdPath: string, skipCheck?: boolean) => {
   // 1. Scan SD
   sendProgress('sd', 0, 'Starting...');
   const sdFiles = await scanFiles(sdPath, (count, folder) => {
     sendProgress('sd', count, folder);
   });
   sendProgress('sd', sdFiles.length, 'Done');
+
+  // Skip backup check — treat all media as new
+  if (skipCheck) {
+    const media = sdFiles.filter((f) => f.isMedia !== false);
+    if (media.length > 0) {
+      sendProgress('dates', 0, 'Reading metadata...');
+      await enrichMetadata(media, (current, total) => {
+        sendProgress('dates', current, `${current}/${total}`);
+      });
+    }
+    return {
+      total: sdFiles.length,
+      backedUp: 0,
+      missing: media,
+      suggestedFolders: [],
+      sources: [],
+    };
+  }
 
   // 2. Build sources and scan all in parallel
   interface SourceResult { name: string; index: NasIndex; ok: boolean; error?: string }
