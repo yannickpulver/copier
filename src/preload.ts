@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('api', {
   cancelTransfer: () => ipcRenderer.invoke('cancel-transfer'),
   testSynology: (host: string, port: number, user: string, pass: string, secure: boolean, folders: string) =>
     ipcRenderer.invoke('test-synology', host, port, user, pass, secure, folders),
+  describeImage: (filePath: string) =>
+    ipcRenderer.invoke('describe-image', filePath) as Promise<{ ok: boolean; description?: string; error?: string }>,
   browseFolder: (defaultPath?: string) =>
     ipcRenderer.invoke('browse-folder', defaultPath),
   revealFile: (filePath: string) =>

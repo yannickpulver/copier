@@ -6,6 +6,7 @@ interface AppSettings {
   checkPaths?: { path: string; fallbackOnly?: boolean }[];
   transferDest?: string;
   transferDests?: string[];
+  geminiKey?: string;
   synologyHost?: string;
   synologyPort?: number;
   synologyUser?: string;

@@ -6,7 +6,7 @@ import { listSdCards, scanFiles } from './lib/scanner';
 import { indexNas, checkBackedUp, listExistingFolders } from './lib/matcher';
 import type { NasIndex, SourceIndex } from './lib/matcher';
 import { SynologyClient } from './lib/synology';
-import { loadSynologyConfig } from './lib/credentials';
+import { loadSynologyConfig, resolveOpReference } from './lib/credentials';
 import { enrichMetadata } from './lib/metadata';
 import { copyFiles, copyFilesGroupedByDate } from './lib/transfer';
 import type { SynologyConfig, FileInfo } from './lib/types';
@@ -52,7 +52,15 @@ ipcMain.handle('list-sd-cards', async () => {
 
 ipcMain.handle('test-synology', async (_event, host: string, port: number, user: string, pass: string, secure: boolean, folders: string) => {
   try {
-    const config: SynologyConfig = { host, port, user, password: pass, secure, folders: folders.trim().split(/\s+/).filter(Boolean) };
+    const [resolvedHost, resolvedUser, resolvedPass] = await Promise.all([
+      resolveOpReference(host),
+      resolveOpReference(user),
+      resolveOpReference(pass),
+    ]);
+    if (!resolvedHost || !resolvedUser || !resolvedPass) {
+      return { ok: false, error: 'Failed to resolve 1Password references' };
+    }
+    const config: SynologyConfig = { host: resolvedHost, port, user: resolvedUser, password: resolvedPass, secure, folders: folders.trim().split(/\s+/).filter(Boolean) };
     const client = new SynologyClient(config);
     await client.login();
     return { ok: true };
@@ -246,6 +254,59 @@ ipcMain.handle('get-setting', (_event, key: string) => {
 
 ipcMain.handle('set-setting', (_event, key: string, value: any) => {
   setSetting(key as any, value);
+});
+
+ipcMain.handle('describe-image', async (_event, filePath: string) => {
+  const apiKey = getSetting('geminiKey');
+  if (!apiKey) {
+    console.log('[Gemini] No API key configured');
+    return { ok: false, error: 'No Gemini API key configured' };
+  }
+
+  try {
+    console.log(`[Gemini] Reading image: ${filePath}`);
+    const fs = await import('node:fs');
+    const imageBuffer = await fs.promises.readFile(filePath);
+    const base64 = imageBuffer.toString('base64');
+    const ext = filePath.split('.').pop()?.toLowerCase() ?? 'jpeg';
+    const mimeMap: Record<string, string> = {
+      jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', heic: 'image/heic',
+      heif: 'image/heif', tiff: 'image/tiff', tif: 'image/tiff',
+    };
+    const mimeType = mimeMap[ext] ?? 'image/jpeg';
+    console.log(`[Gemini] Image size: ${(imageBuffer.length / 1024 / 1024).toFixed(1)}MB, type: ${mimeType}`);
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
+    const body = JSON.stringify({
+      contents: [{
+        parts: [
+          { text: 'Describe this photo in at most 5 words. Only respond with the description, nothing else. Use lowercase.' },
+          { inlineData: { mimeType, data: base64 } },
+        ],
+      }],
+    });
+
+    console.log('[Gemini] Sending request...');
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    });
+
+    if (!resp.ok) {
+      const text = await resp.text();
+      console.error(`[Gemini] API error ${resp.status}: ${text.slice(0, 500)}`);
+      return { ok: false, error: `Gemini API ${resp.status}: ${text.slice(0, 200)}` };
+    }
+
+    const json = await resp.json() as any;
+    const text = json.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? '';
+    console.log(`[Gemini] Success: "${text}"`);
+    return { ok: true, description: text };
+  } catch (e: any) {
+    console.error(`[Gemini] Exception: ${e.message}`);
+    return { ok: false, error: e.message };
+  }
 });
 
 ipcMain.on('reveal-file', (_event, filePath: string) => {

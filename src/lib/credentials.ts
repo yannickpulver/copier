@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { getSetting } from './store';
 import type { SynologyConfig } from './types';
 
-function resolveOpReference(value: string | undefined): Promise<string | undefined> {
+export function resolveOpReference(value: string | undefined): Promise<string | undefined> {
   if (!value || !value.startsWith('op://')) return Promise.resolve(value);
   return new Promise((resolve) => {
     execFile('op', ['read', value], { timeout: 10000 }, (err, stdout) => {

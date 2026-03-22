@@ -16,6 +16,7 @@ declare global {
       transfer: (files: any[], dest: string, mode: string, topic?: string, cameraSubfolder?: boolean) => Promise<{ errors: string[]; cancelled: boolean }>;
       cancelTransfer: () => Promise<void>;
       testSynology: (host: string, port: number, user: string, pass: string, secure: boolean, folders: string) => Promise<{ ok: boolean; error?: string }>;
+      describeImage: (filePath: string) => Promise<{ ok: boolean; description?: string; error?: string }>;
       browseFolder: (defaultPath?: string) => Promise<string | null>;
       revealFile: (filePath: string) => void;
       findAndOpenFolder: (folderName: string, searchBase: string) => Promise<boolean>;
@@ -353,6 +354,29 @@ scanBtn.addEventListener('click', async () => {
       if (suggestion.mode === 'new' && suggestion.folderName) {
         newFolderInput.value = suggestion.folderName;
       }
+
+      // Gemini: describe a sample image to suggest a topic
+      const geminiKey = await window.api.getSetting('geminiKey');
+      if (geminiKey) {
+        const imageExts = new Set(['.jpg', '.jpeg', '.heic', '.heif', '.png', '.tiff', '.tif']);
+        const images = media.filter((f: any) => {
+          const ext = f.name.split('.').pop()?.toLowerCase() ?? '';
+          return imageExts.has(`.${ext}`);
+        });
+        if (images.length > 0) {
+          const sample = images[Math.floor(images.length / 2)];
+          status.textContent = 'AI: describing images...';
+          const desc = await window.api.describeImage(sample.fullPath);
+          if (desc.ok && desc.description) {
+            topicInput.value = desc.description;
+            // Also append to new folder name if it ends with " - "
+            if (newFolderInput.value.endsWith(' - ')) {
+              newFolderInput.value += desc.description;
+            }
+            status.textContent = `AI suggested: ${desc.description}`;
+          }
+        }
+      }
     }
   } catch (e: any) {
     status.textContent = `Error: ${e.message}`;
@@ -516,7 +540,7 @@ document.querySelectorAll<HTMLButtonElement>('.settings-card-header').forEach((b
   });
 });
 
-function updateCardSummaries(host: string, folders: string) {
+function updateCardSummaries(host: string, folders: string, geminiKey?: string) {
   const synoOk = !!(host);
   document.getElementById('card-synology-dot')!.className =
     `w-2 h-2 rounded-full shrink-0 ${synoOk ? 'bg-green-500' : 'bg-neutral-600'}`;
@@ -534,6 +558,12 @@ function updateCardSummaries(host: string, folders: string) {
     `w-2 h-2 rounded-full shrink-0 ${destCount > 0 ? 'bg-green-500' : 'bg-neutral-600'}`;
   document.getElementById('card-dests-summary')!.textContent =
     destCount > 0 ? currentTransferDests.map((d) => d.split('/').pop()).join(', ') : 'No destinations';
+
+  const geminiOk = !!(geminiKey);
+  document.getElementById('card-gemini-dot')!.className =
+    `w-2 h-2 rounded-full shrink-0 ${geminiOk ? 'bg-green-500' : 'bg-neutral-600'}`;
+  document.getElementById('card-gemini-summary')!.textContent =
+    geminiOk ? 'API key set' : 'Not configured';
 }
 
 settingsToggle.addEventListener('click', async () => {
@@ -545,7 +575,7 @@ settingsToggle.addEventListener('click', async () => {
     const cfgPathsList = document.getElementById('cfg-paths-list')!;
     const cfgDestsList = document.getElementById('cfg-dests-list')!;
 
-    const [host, port, user, pass, folders, secure, checkPaths, savedDests] = await Promise.all([
+    const [host, port, user, pass, folders, secure, checkPaths, savedDests, geminiKey] = await Promise.all([
       window.api.getSetting('synologyHost'),
       window.api.getSetting('synologyPort'),
       window.api.getSetting('synologyUser'),
@@ -554,6 +584,7 @@ settingsToggle.addEventListener('click', async () => {
       window.api.getSetting('synologySecure'),
       window.api.getSetting('checkPaths'),
       window.api.getSetting('transferDests'),
+      window.api.getSetting('geminiKey'),
     ]);
     cfgHost.value = host ?? '';
     cfgPort.value = String(port ?? 5001);
@@ -561,6 +592,7 @@ settingsToggle.addEventListener('click', async () => {
     cfgPass.value = pass ?? '';
     cfgFolders.value = folders ?? '';
     cfgSecure.checked = secure ?? true;
+    $<HTMLInputElement>('#cfg-gemini-key').value = geminiKey ?? '';
 
     currentCheckPaths = normalizeCheckPaths(checkPaths);
     renderPathChips(cfgPathsList);
@@ -571,7 +603,7 @@ settingsToggle.addEventListener('click', async () => {
     // Collapse all detail sections
     document.querySelectorAll('[id^="card-"][id$="-detail"]').forEach((d) => d.classList.add('hidden'));
 
-    updateCardSummaries(host ?? '', folders ?? '');
+    updateCardSummaries(host ?? '', folders ?? '', geminiKey ?? '');
 
     mainContent.classList.add('hidden');
     settingsPanel.classList.remove('hidden');
@@ -668,6 +700,7 @@ cfgSave.addEventListener('click', async () => {
     window.api.setSetting('synologySecure', cfgSecure.checked),
     window.api.setSetting('checkPaths', currentCheckPaths.length ? currentCheckPaths as any : undefined),
     window.api.setSetting('transferDests', currentTransferDests.length ? currentTransferDests : undefined),
+    window.api.setSetting('geminiKey', $<HTMLInputElement>('#cfg-gemini-key').value || undefined),
   ]);
 
   // Sync transfer dests to main screen
