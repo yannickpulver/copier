@@ -50,6 +50,17 @@ ipcMain.handle('list-sd-cards', async () => {
   return listSdCards();
 });
 
+ipcMain.handle('test-synology', async (_event, host: string, port: number, user: string, pass: string, secure: boolean, folders: string) => {
+  try {
+    const config: SynologyConfig = { host, port, user, password: pass, secure, folders: folders.trim().split(/\s+/).filter(Boolean) };
+    const client = new SynologyClient(config);
+    await client.login();
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: e.message };
+  }
+});
+
 ipcMain.handle('load-synology-config', async () => {
   synologyConfig = await loadSynologyConfig();
   if (synologyConfig) {
@@ -173,45 +184,60 @@ ipcMain.handle('list-existing-folders', (_event, nasPath: string) => {
   return listExistingFolders(nasPath);
 });
 
+let transferAbort: AbortController | null = null;
+
 ipcMain.handle('transfer', async (_event, files: FileInfo[], dest: string, mode: string, topic?: string, cameraSubfolder?: boolean) => {
+  transferAbort = new AbortController();
+  const { signal } = transferAbort;
+
   const onProgress = (current: number, total: number, name: string) => {
     mainWindow?.webContents.send('transfer-progress', { current, total, name });
   };
 
-  if (cameraSubfolder) {
-    // Group files by camera, then apply the chosen mode within each camera folder
-    const byCamera = new Map<string, FileInfo[]>();
-    for (const f of files) {
-      const cam = f.camera ?? 'Unknown';
-      const existing = byCamera.get(cam);
-      if (existing) existing.push(f);
-      else byCamera.set(cam, [f]);
-    }
-    const allErrors: string[] = [];
-    let done = 0;
-    for (const [camera, cameraFiles] of byCamera) {
-      const cameraDest = path.join(dest, camera);
-      let errors: string[];
-      if (mode === 'grouped') {
-        errors = await copyFilesGroupedByDate(cameraFiles, cameraDest, topic ?? '', (c, t, n) => {
-          onProgress(done + c, files.length, n);
-        });
-      } else {
-        errors = await copyFiles(cameraFiles, cameraDest, (c, t, n) => {
-          onProgress(done + c, cameraFiles.length, n);
-        });
+  try {
+    if (cameraSubfolder) {
+      const byCamera = new Map<string, FileInfo[]>();
+      for (const f of files) {
+        const cam = f.camera ?? 'Unknown';
+        const existing = byCamera.get(cam);
+        if (existing) existing.push(f);
+        else byCamera.set(cam, [f]);
       }
-      done += cameraFiles.length;
-      allErrors.push(...errors);
+      const allErrors: string[] = [];
+      let done = 0;
+      for (const [camera, cameraFiles] of byCamera) {
+        if (signal.aborted) break;
+        const cameraDest = path.join(dest, camera);
+        let errors: string[];
+        if (mode === 'grouped') {
+          errors = await copyFilesGroupedByDate(cameraFiles, cameraDest, topic ?? '', (c, t, n) => {
+            onProgress(done + c, files.length, n);
+          }, signal);
+        } else {
+          errors = await copyFiles(cameraFiles, cameraDest, (c, t, n) => {
+            onProgress(done + c, cameraFiles.length, n);
+          }, signal);
+        }
+        done += cameraFiles.length;
+        allErrors.push(...errors);
+      }
+      return { errors: allErrors, cancelled: signal.aborted };
     }
-    return allErrors;
-  }
 
-  if (mode === 'grouped') {
-    return copyFilesGroupedByDate(files, dest, topic ?? '', onProgress);
-  } else {
-    return copyFiles(files, dest, onProgress);
+    let errors: string[];
+    if (mode === 'grouped') {
+      errors = await copyFilesGroupedByDate(files, dest, topic ?? '', onProgress, signal);
+    } else {
+      errors = await copyFiles(files, dest, onProgress, signal);
+    }
+    return { errors, cancelled: signal.aborted };
+  } finally {
+    transferAbort = null;
   }
+});
+
+ipcMain.handle('cancel-transfer', () => {
+  transferAbort?.abort();
 });
 
 ipcMain.handle('get-setting', (_event, key: string) => {

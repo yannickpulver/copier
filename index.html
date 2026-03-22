@@ -49,6 +49,10 @@
                   <span class="text-neutral-400">Use secure connection</span>
                 </label>
               </div>
+              <div class="flex items-center gap-2 mt-2">
+                <button id="cfg-test-synology" class="px-2 py-1 bg-neutral-700 hover:bg-neutral-600 rounded text-[11px] transition-colors">Test connection</button>
+                <span id="cfg-test-result" class="text-[10px]"></span>
+              </div>
             </div>
           </div>
 
@@ -193,6 +197,9 @@
           <div class="flex items-center gap-3 pt-1">
             <button id="transfer-btn" class="px-3 py-1.5 bg-green-600 hover:bg-green-500 rounded-md text-xs font-medium transition-colors">
               Transfer
+            </button>
+            <button id="cancel-transfer-btn" class="hidden px-3 py-1.5 bg-red-600/80 hover:bg-red-500 rounded-md text-xs font-medium transition-colors">
+              Cancel
             </button>
             <div class="flex-1 bg-neutral-800 rounded-full h-2 overflow-hidden">
               <div id="progress-bar" class="bg-green-500 h-full transition-all duration-200" style="width: 0%"></div>

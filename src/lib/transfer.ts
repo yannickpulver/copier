@@ -21,11 +21,13 @@ export async function copyFiles(
   files: FileInfo[],
   destFolder: string,
   onProgress?: (current: number, total: number, name: string) => void,
+  signal?: AbortSignal,
 ): Promise<string[]> {
   await fs.promises.mkdir(destFolder, { recursive: true });
   const errors: string[] = [];
 
   for (let i = 0; i < files.length; i++) {
+    if (signal?.aborted) break;
     const f = files[i];
     try {
       const dest = resolveCollision(path.join(destFolder, f.name));
@@ -44,6 +46,7 @@ export async function copyFilesGroupedByDate(
   basePath: string,
   topic: string,
   onProgress?: (current: number, total: number, name: string) => void,
+  signal?: AbortSignal,
 ): Promise<string[]> {
   const errors: string[] = [];
   const grouped = new Map<string, FileInfo[]>();
@@ -62,11 +65,13 @@ export async function copyFilesGroupedByDate(
 
   let done = 0;
   for (const [date, dateFiles] of grouped) {
+    if (signal?.aborted) break;
     const folderName = topic ? `${date} - ${topic}` : date;
     const destFolder = path.join(basePath, folderName);
     await fs.promises.mkdir(destFolder, { recursive: true });
 
     for (const f of dateFiles) {
+      if (signal?.aborted) break;
       try {
         const dest = resolveCollision(path.join(destFolder, f.name));
         await fs.promises.copyFile(f.fullPath, dest);
@@ -85,6 +90,7 @@ export async function copyFilesGroupedByCamera(
   files: FileInfo[],
   basePath: string,
   onProgress?: (current: number, total: number, name: string) => void,
+  signal?: AbortSignal,
 ): Promise<string[]> {
   const errors: string[] = [];
   const grouped = new Map<string, FileInfo[]>();
@@ -101,10 +107,12 @@ export async function copyFilesGroupedByCamera(
 
   let done = 0;
   for (const [camera, cameraFiles] of grouped) {
+    if (signal?.aborted) break;
     const destFolder = path.join(basePath, camera);
     await fs.promises.mkdir(destFolder, { recursive: true });
 
     for (const f of cameraFiles) {
+      if (signal?.aborted) break;
       try {
         const dest = resolveCollision(path.join(destFolder, f.name));
         await fs.promises.copyFile(f.fullPath, dest);

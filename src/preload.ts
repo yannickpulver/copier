@@ -8,6 +8,9 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('list-existing-folders', nasPath),
   transfer: (files: any[], dest: string, mode: string, topic?: string, cameraSubfolder?: boolean) =>
     ipcRenderer.invoke('transfer', files, dest, mode, topic, cameraSubfolder),
+  cancelTransfer: () => ipcRenderer.invoke('cancel-transfer'),
+  testSynology: (host: string, port: number, user: string, pass: string, secure: boolean, folders: string) =>
+    ipcRenderer.invoke('test-synology', host, port, user, pass, secure, folders),
   browseFolder: (defaultPath?: string) =>
     ipcRenderer.invoke('browse-folder', defaultPath),
   revealFile: (filePath: string) =>

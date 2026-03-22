@@ -13,7 +13,9 @@ declare global {
         sources: { name: string; ok: boolean; error?: string }[];
       }>;
       listExistingFolders: (nasPath: string) => Promise<string[]>;
-      transfer: (files: any[], dest: string, mode: string, topic?: string, cameraSubfolder?: boolean) => Promise<string[]>;
+      transfer: (files: any[], dest: string, mode: string, topic?: string, cameraSubfolder?: boolean) => Promise<{ errors: string[]; cancelled: boolean }>;
+      cancelTransfer: () => Promise<void>;
+      testSynology: (host: string, port: number, user: string, pass: string, secure: boolean, folders: string) => Promise<{ ok: boolean; error?: string }>;
       browseFolder: (defaultPath?: string) => Promise<string | null>;
       revealFile: (filePath: string) => void;
       findAndOpenFolder: (folderName: string, searchBase: string) => Promise<boolean>;
@@ -396,22 +398,34 @@ transferBtn.addEventListener('click', async () => {
   }
 
   const topic = topicInput.value.trim();
+  const cancelBtn = $<HTMLButtonElement>('#cancel-transfer-btn');
   transferBtn.disabled = true;
+  cancelBtn.classList.remove('hidden');
   progressBar.style.width = '0%';
 
   try {
     const cameraSubfolder = $<HTMLInputElement>('#camera-subfolder').checked;
-    const errors = await window.api.transfer(missingFiles, dest, mode, topic, cameraSubfolder);
-    progressBar.style.width = '100%';
-    progressLabel.textContent = errors.length ? `Done — ${errors.length} errors` : 'Done!';
-    status.textContent = 'Transfer complete — rescanning...';
-    await new Promise((r) => setTimeout(r, 800));
-    scanBtn.click();
+    const result = await window.api.transfer(missingFiles, dest, mode, topic, cameraSubfolder);
+    if (result.cancelled) {
+      progressLabel.textContent = 'Cancelled';
+      status.textContent = 'Transfer cancelled';
+    } else {
+      progressBar.style.width = '100%';
+      progressLabel.textContent = result.errors.length ? `Done — ${result.errors.length} errors` : 'Done!';
+      status.textContent = 'Transfer complete — rescanning...';
+      await new Promise((r) => setTimeout(r, 800));
+      scanBtn.click();
+    }
   } catch (e: any) {
     progressLabel.textContent = `Error: ${e.message}`;
   } finally {
     transferBtn.disabled = false;
+    cancelBtn.classList.add('hidden');
   }
+});
+
+$<HTMLButtonElement>('#cancel-transfer-btn').addEventListener('click', () => {
+  window.api.cancelTransfer();
 });
 
 // --- Smart suggestion ---
@@ -608,6 +622,25 @@ function renderDestChips(container: HTMLElement) {
     });
   });
 }
+
+document.getElementById('cfg-test-synology')!.addEventListener('click', async () => {
+  const btn = $<HTMLButtonElement>('#cfg-test-synology');
+  const resultEl = document.getElementById('cfg-test-result')!;
+  btn.disabled = true;
+  resultEl.textContent = 'Testing...';
+  resultEl.className = 'text-[10px] text-neutral-400';
+  const result = await window.api.testSynology(
+    cfgHost.value, parseInt(cfgPort.value) || 5001, cfgUser.value, cfgPass.value, cfgSecure.checked, cfgFolders.value,
+  );
+  btn.disabled = false;
+  if (result.ok) {
+    resultEl.textContent = 'Connected';
+    resultEl.className = 'text-[10px] text-green-400';
+  } else {
+    resultEl.textContent = result.error ?? 'Failed';
+    resultEl.className = 'text-[10px] text-red-400';
+  }
+});
 
 document.getElementById('cfg-add-path')!.addEventListener('click', async () => {
   const path = await window.api.browseFolder();
