@@ -5,7 +5,9 @@ declare global {
     api: {
       listSdCards: () => Promise<{ name: string; path: string }[]>;
       loadSynologyConfig: () => Promise<{ available: boolean; folders: string[] }>;
-      checkSourcesStatus: () => Promise<{ name: string; type: string; available: boolean }[]>;
+      checkSourcesStatus: () => Promise<void>;
+      onSourcesList: (cb: (sources: { name: string; type: string }[]) => void) => () => void;
+      onSourceStatus: (cb: (data: { index: number; available: boolean }) => void) => () => void;
       scan: (sdPath: string, skipCheck?: boolean) => Promise<{
         total: number;
         backedUp: number;
@@ -57,25 +59,40 @@ const otherList = $<HTMLTableSectionElement>('#other-list');
 let sdCards: { name: string; path: string }[] = [];
 let missingFiles: any[] = [];
 
-function renderSourcesStatus(sources: { name: string; type: string; available: boolean }[]) {
+const spinner = '<span class="inline-block w-2.5 h-2.5 border border-neutral-500 border-t-transparent rounded-full animate-spin shrink-0"></span>';
+
+function renderSourcesPending(sources: { name: string; type: string }[]) {
   if (sources.length === 0) {
     sourcesStatus.innerHTML = '<span class="text-xs text-neutral-500">No sources — open ⚙</span>';
     return;
   }
-  sourcesStatus.innerHTML = sources.map((s) => {
-    const dot = s.available
-      ? '<span class="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0"></span>'
-      : '<span class="w-1.5 h-1.5 rounded-full bg-neutral-600 shrink-0"></span>';
+  sourcesStatus.innerHTML = sources.map((s, i) => {
     const label = s.type === 'fallback' ? `${escapeHtml(s.name)} (fallback)` : escapeHtml(s.name);
-    const textClass = s.available ? 'text-neutral-300' : 'text-neutral-500';
-    return `<span class="flex items-center gap-1.5 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs ${textClass}">${dot} ${label}</span>`;
+    return `<span id="source-pill-${i}" class="flex items-center gap-1.5 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-neutral-500">${spinner} ${label}</span>`;
   }).join('');
 }
 
-async function refreshSourcesStatus() {
-  const sources = await window.api.checkSourcesStatus();
-  renderSourcesStatus(sources);
+function resolveSourcePill(index: number, available: boolean) {
+  const pill = document.getElementById(`source-pill-${index}`);
+  if (!pill) return;
+  const dot = available
+    ? '<span class="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0"></span>'
+    : '<span class="w-1.5 h-1.5 rounded-full bg-neutral-600 shrink-0"></span>';
+  const spinnerEl = pill.querySelector('.animate-spin');
+  if (spinnerEl) spinnerEl.outerHTML = dot;
+  pill.className = pill.className.replace('text-neutral-500', available ? 'text-neutral-300' : 'text-neutral-500');
 }
+
+// Listen for per-source updates
+window.api.onSourcesList((sources) => {
+  renderSourcesPending(sources);
+  document.getElementById('sources-loader')?.remove();
+  document.getElementById('actions-row')?.classList.remove('hidden');
+});
+
+window.api.onSourceStatus(({ index, available }) => {
+  resolveSourcePill(index, available);
+});
 
 function normalizeCheckPaths(raw: any): { path: string; fallbackOnly?: boolean }[] {
   if (!Array.isArray(raw)) return [];
@@ -113,15 +130,12 @@ async function init() {
     document.getElementById('sd-loader')?.remove();
   });
 
-  const sourcesPromise = refreshSourcesStatus().then(() => {
-    document.getElementById('sources-loader')?.remove();
-    document.getElementById('actions-row')?.classList.remove('hidden');
-  });
+  const sourcesPromise = window.api.checkSourcesStatus();
 
   await Promise.all([destsPromise, sdPromise, sourcesPromise]);
 
   setInterval(refreshSdCards, 3000);
-  setInterval(refreshSourcesStatus, 10000);
+  setInterval(() => window.api.checkSourcesStatus(), 10000);
 }
 
 async function refreshSdCards() {
@@ -729,7 +743,7 @@ cfgSave.addEventListener('click', async () => {
   settingsPanel.classList.add('hidden');
   mainContent.classList.remove('hidden');
 
-  refreshSourcesStatus();
+  window.api.checkSourcesStatus();
 });
 
 init();

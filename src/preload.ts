@@ -3,7 +3,17 @@ import { contextBridge, ipcRenderer } from 'electron';
 contextBridge.exposeInMainWorld('api', {
   listSdCards: () => ipcRenderer.invoke('list-sd-cards'),
   loadSynologyConfig: () => ipcRenderer.invoke('load-synology-config'),
-  checkSourcesStatus: () => ipcRenderer.invoke('check-sources-status') as Promise<{ name: string; type: string; available: boolean }[]>,
+  checkSourcesStatus: () => ipcRenderer.invoke('check-sources-status'),
+  onSourcesList: (cb: (sources: { name: string; type: string }[]) => void) => {
+    const listener = (_event: any, data: any) => cb(data);
+    ipcRenderer.on('sources-list', listener);
+    return () => ipcRenderer.removeListener('sources-list', listener);
+  },
+  onSourceStatus: (cb: (data: { index: number; available: boolean }) => void) => {
+    const listener = (_event: any, data: any) => cb(data);
+    ipcRenderer.on('source-status', listener);
+    return () => ipcRenderer.removeListener('source-status', listener);
+  },
   scan: (sdPath: string, skipCheck?: boolean) => ipcRenderer.invoke('scan', sdPath, skipCheck),
   listExistingFolders: (nasPath: string) =>
     ipcRenderer.invoke('list-existing-folders', nasPath),

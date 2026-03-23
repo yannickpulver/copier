@@ -79,32 +79,40 @@ ipcMain.handle('load-synology-config', async () => {
 
 ipcMain.handle('check-sources-status', async () => {
   const fs = await import('node:fs');
-  const sources: { name: string; type: string; available: boolean }[] = [];
 
-  // Check Synology
+  interface SourceEntry { name: string; type: string; checkPath?: string }
+  const sources: SourceEntry[] = [];
+
   const config = await loadSynologyConfig();
   if (config) {
-    let available = false;
-    try {
-      const client = new SynologyClient(config);
-      await client.login();
-      available = true;
-    } catch { /* offline */ }
-    sources.push({ name: 'Synology API', type: 'synology', available });
+    sources.push({ name: 'Synology API', type: 'synology' });
   }
-
-  // Check local paths
   const rawPaths = getSetting('checkPaths') ?? [];
   const checkPaths = rawPaths.map((item: any) =>
     typeof item === 'string' ? { path: item, fallbackOnly: false } : item
   );
   for (const cp of checkPaths) {
     const label = cp.path.split('/').pop() ?? cp.path;
-    const available = fs.existsSync(cp.path);
-    sources.push({ name: label, type: cp.fallbackOnly ? 'fallback' : 'local', available });
+    sources.push({ name: label, type: cp.fallbackOnly ? 'fallback' : 'local', checkPath: cp.path });
   }
 
-  return sources;
+  // Send list so renderer shows pills with loaders
+  mainWindow?.webContents.send('sources-list', sources.map((s) => ({ name: s.name, type: s.type })));
+
+  // Check each in parallel, emit per-source result
+  await Promise.all(sources.map(async (s, i) => {
+    let available = false;
+    if (s.type === 'synology' && config) {
+      try {
+        const client = new SynologyClient(config);
+        await client.login();
+        available = true;
+      } catch { /* offline */ }
+    } else if (s.checkPath) {
+      available = fs.existsSync(s.checkPath);
+    }
+    mainWindow?.webContents.send('source-status', { index: i, available });
+  }));
 });
 
 ipcMain.handle('scan', async (_event, sdPath: string, skipCheck?: boolean) => {
