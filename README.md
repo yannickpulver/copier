@@ -2,6 +2,8 @@
 
 Desktop app to check if SD card files are backed up and transfer missing ones.
 
+![Screenshot](screenshot.png)
+
 ## Features
 
 - Auto-detects SD cards (excludes SSDs)
