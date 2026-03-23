@@ -152,6 +152,9 @@ async function refreshSdCards() {
 
     if (cards.find((c) => c.path === prev)) {
       sdSelect.value = prev;
+    } else {
+      // SD card changed — reset results
+      resetResults();
     }
     scanBtn.disabled = cards.length === 0;
     instantTransferBtn.disabled = cards.length === 0;
@@ -197,6 +200,19 @@ window.api.onScanProgress(({ step, count, folder }) => {
     status.textContent = `Reading dates: ${folder}`;
   }
 });
+
+function resetResults() {
+  missingFiles = [];
+  fileList.innerHTML = '';
+  otherList.innerHTML = '';
+  allBackedUp.classList.add('hidden');
+  fileTable.classList.add('hidden');
+  otherSection.classList.add('hidden');
+  transferSection.classList.add('hidden');
+  progressBar.style.width = '0%';
+  progressLabel.textContent = '';
+  status.textContent = '';
+}
 
 async function runScan(skipCheck: boolean) {
   const sdPath = sdSelect.value;
