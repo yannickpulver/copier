@@ -77,6 +77,36 @@ ipcMain.handle('load-synology-config', async () => {
   return { available: false, folders: [] };
 });
 
+ipcMain.handle('check-sources-status', async () => {
+  const fs = await import('node:fs');
+  const sources: { name: string; type: string; available: boolean }[] = [];
+
+  // Check Synology
+  const config = await loadSynologyConfig();
+  if (config) {
+    let available = false;
+    try {
+      const client = new SynologyClient(config);
+      await client.login();
+      available = true;
+    } catch { /* offline */ }
+    sources.push({ name: 'Synology API', type: 'synology', available });
+  }
+
+  // Check local paths
+  const rawPaths = getSetting('checkPaths') ?? [];
+  const checkPaths = rawPaths.map((item: any) =>
+    typeof item === 'string' ? { path: item, fallbackOnly: false } : item
+  );
+  for (const cp of checkPaths) {
+    const label = cp.path.split('/').pop() ?? cp.path;
+    const available = fs.existsSync(cp.path);
+    sources.push({ name: label, type: cp.fallbackOnly ? 'fallback' : 'local', available });
+  }
+
+  return sources;
+});
+
 ipcMain.handle('scan', async (_event, sdPath: string, skipCheck?: boolean) => {
   // 1. Scan SD
   sendProgress('sd', 0, 'Starting...');

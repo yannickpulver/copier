@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 contextBridge.exposeInMainWorld('api', {
   listSdCards: () => ipcRenderer.invoke('list-sd-cards'),
   loadSynologyConfig: () => ipcRenderer.invoke('load-synology-config'),
+  checkSourcesStatus: () => ipcRenderer.invoke('check-sources-status') as Promise<{ name: string; type: string; available: boolean }[]>,
   scan: (sdPath: string, skipCheck?: boolean) => ipcRenderer.invoke('scan', sdPath, skipCheck),
   listExistingFolders: (nasPath: string) =>
     ipcRenderer.invoke('list-existing-folders', nasPath),

@@ -5,6 +5,7 @@ declare global {
     api: {
       listSdCards: () => Promise<{ name: string; path: string }[]>;
       loadSynologyConfig: () => Promise<{ available: boolean; folders: string[] }>;
+      checkSourcesStatus: () => Promise<{ name: string; type: string; available: boolean }[]>;
       scan: (sdPath: string, skipCheck?: boolean) => Promise<{
         total: number;
         backedUp: number;
@@ -31,8 +32,9 @@ declare global {
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
 
 const sdSelect = $<HTMLSelectElement>('#sd-select');
-const sourcesSummary = $('#sources-summary');
+const sourcesStatus = $('#sources-status');
 const scanBtn = $<HTMLButtonElement>('#scan-btn');
+const instantTransferBtn = $<HTMLButtonElement>('#instant-transfer-btn');
 const status = $('#status');
 const fileList = $<HTMLDivElement>('#file-list');
 const transferSection = $('#transfer-section');
@@ -55,14 +57,24 @@ const otherList = $<HTMLTableSectionElement>('#other-list');
 let sdCards: { name: string; path: string }[] = [];
 let missingFiles: any[] = [];
 
-function updateSourcesSummary(apiAvailable: boolean, checkPaths: { path: string; fallbackOnly?: boolean }[]) {
-  const parts: string[] = [];
-  if (apiAvailable) parts.push('Synology API');
-  for (const cp of checkPaths) {
-    const name = cp.path.split('/').pop() ?? cp.path;
-    parts.push(cp.fallbackOnly ? `${name} (if offline)` : name);
+function renderSourcesStatus(sources: { name: string; type: string; available: boolean }[]) {
+  if (sources.length === 0) {
+    sourcesStatus.innerHTML = '<span class="text-xs text-neutral-500">No sources — open ⚙</span>';
+    return;
   }
-  sourcesSummary.textContent = parts.length ? parts.join(', ') : 'No sources — open ⚙';
+  sourcesStatus.innerHTML = sources.map((s) => {
+    const dot = s.available
+      ? '<span class="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0"></span>'
+      : '<span class="w-1.5 h-1.5 rounded-full bg-neutral-600 shrink-0"></span>';
+    const label = s.type === 'fallback' ? `${escapeHtml(s.name)} (fallback)` : escapeHtml(s.name);
+    const textClass = s.available ? 'text-neutral-300' : 'text-neutral-500';
+    return `<span class="flex items-center gap-1.5 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs ${textClass}">${dot} ${label}</span>`;
+  }).join('');
+}
+
+async function refreshSourcesStatus() {
+  const sources = await window.api.checkSourcesStatus();
+  renderSourcesStatus(sources);
 }
 
 function normalizeCheckPaths(raw: any): { path: string; fallbackOnly?: boolean }[] {
@@ -85,28 +97,31 @@ function populateTransferDests() {
 }
 
 async function init() {
-  const [config, savedDests, oldDest, rawCheckPaths] = await Promise.all([
-    window.api.loadSynologyConfig(),
+  // Fire all in parallel, each section resolves independently
+  const destsPromise = Promise.all([
     window.api.getSetting('transferDests'),
     window.api.getSetting('transferDest'),
-    window.api.getSetting('checkPaths'),
-    refreshSdCards(),
-  ]);
+  ]).then(([savedDests, oldDest]) => {
+    transferDests = savedDests ?? (oldDest ? [oldDest] : []);
+    if (!savedDests && oldDest) {
+      window.api.setSetting('transferDests', transferDests);
+    }
+    populateTransferDests();
+  });
 
-  // Migrate old single dest to array
-  transferDests = savedDests ?? (oldDest ? [oldDest] : []);
-  if (!savedDests && oldDest) {
-    window.api.setSetting('transferDests', transferDests);
-  }
-  populateTransferDests();
+  const sdPromise = refreshSdCards().then(() => {
+    document.getElementById('sd-loader')?.remove();
+  });
 
-  const savedCheckPaths = normalizeCheckPaths(rawCheckPaths);
-  updateSourcesSummary(config.available, savedCheckPaths);
+  const sourcesPromise = refreshSourcesStatus().then(() => {
+    document.getElementById('sources-loader')?.remove();
+    document.getElementById('actions-row')?.classList.remove('hidden');
+  });
 
-  document.getElementById('loader')!.classList.add('hidden');
-  document.getElementById('main-content')!.classList.remove('hidden');
+  await Promise.all([destsPromise, sdPromise, sourcesPromise]);
 
   setInterval(refreshSdCards, 3000);
+  setInterval(refreshSourcesStatus, 10000);
 }
 
 async function refreshSdCards() {
@@ -125,6 +140,7 @@ async function refreshSdCards() {
       sdSelect.value = prev;
     }
     scanBtn.disabled = cards.length === 0;
+    instantTransferBtn.disabled = cards.length === 0;
   }
 }
 
@@ -168,13 +184,12 @@ window.api.onScanProgress(({ step, count, folder }) => {
   }
 });
 
-scanBtn.addEventListener('click', async () => {
+async function runScan(skipCheck: boolean) {
   const sdPath = sdSelect.value;
   if (!sdPath) return;
 
-  const skipCheck = $<HTMLInputElement>('#skip-check').checked;
-
   scanBtn.disabled = true;
+  instantTransferBtn.disabled = true;
   status.textContent = skipCheck ? 'Scanning files...' : 'Starting scan...';
   fileList.innerHTML = '';
   otherList.innerHTML = '';
@@ -382,8 +397,12 @@ scanBtn.addEventListener('click', async () => {
     status.textContent = `Error: ${e.message}`;
   } finally {
     scanBtn.disabled = false;
+    instantTransferBtn.disabled = false;
   }
-});
+}
+
+scanBtn.addEventListener('click', () => runScan(false));
+instantTransferBtn.addEventListener('click', () => runScan(true));
 
 // Toggle date groups preview
 document.querySelectorAll<HTMLInputElement>('input[name="xfer-mode"]').forEach((radio) => {
@@ -710,8 +729,7 @@ cfgSave.addEventListener('click', async () => {
   settingsPanel.classList.add('hidden');
   mainContent.classList.remove('hidden');
 
-  const config = await window.api.loadSynologyConfig();
-  updateSourcesSummary(config.available, currentCheckPaths);
+  refreshSourcesStatus();
 });
 
 init();
