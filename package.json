@@ -17,6 +17,10 @@
     "name": "Yannick Pulver",
     "email": "yannick@appswithlove.com"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yannickpulver/copier"
+  },
   "license": "MIT",
   "devDependencies": {
     "@electron-forge/cli": "^7.11.1",
@@ -45,6 +49,7 @@
     "electron-squirrel-startup": "^1.0.1",
     "exifreader": "^4.37.0",
     "plist": "^3.1.0",
-    "tailwindcss": "^4.2.2"
+    "tailwindcss": "^4.2.2",
+    "update-electron-app": "^3.1.2"
   }
 }

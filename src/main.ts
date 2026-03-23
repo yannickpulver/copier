@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
+import { updateElectronApp } from 'update-electron-app';
 
 import { listSdCards, scanFiles } from './lib/scanner';
 import { indexNas, checkBackedUp, listExistingFolders } from './lib/matcher';
@@ -13,6 +14,8 @@ import type { SynologyConfig, FileInfo } from './lib/types';
 import { getSetting, setSetting } from './lib/store';
 
 if (started) app.quit();
+
+updateElectronApp();
 
 let mainWindow: BrowserWindow;
 let synologyConfig: SynologyConfig | null = null;
