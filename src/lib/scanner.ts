@@ -51,8 +51,7 @@ function checkVolume(ident: string, name: string, mount: string): Promise<SdCard
         const isSsd = info.SolidState ?? false;
         const bus = info.BusProtocol ?? '';
 
-        if (isSsd) { resolve(null); return; }
-        if (removable || isExternal || protocol.includes('Secure Digital') || bus === 'USB') {
+        if (removable || isExternal || protocol.includes('Secure Digital') || bus === 'USB' || bus === 'Thunderbolt') {
           resolve({ name, path: mount });
         } else {
           resolve(null);

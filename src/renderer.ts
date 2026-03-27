@@ -59,6 +59,91 @@ const otherList = $<HTMLTableSectionElement>('#other-list');
 let sdCards: { name: string; path: string }[] = [];
 let missingFiles: any[] = [];
 
+const MIN_SESSION_GAP_MS = 15 * 60 * 1000; // 15 min minimum to consider a break
+
+/** Split files into sessions by detecting natural time gaps within a day. */
+function detectSessions(files: any[]): Map<string, any[]> {
+  const byDay = new Map<string, any[]>();
+  for (const f of files) {
+    const day = f.captureDate
+      ? new Date(f.captureDate).toISOString().slice(0, 10)
+      : 'unknown';
+    const arr = byDay.get(day);
+    if (arr) arr.push(f);
+    else byDay.set(day, [f]);
+  }
+
+  const sessions = new Map<string, any[]>();
+  for (const [day, dayFiles] of byDay) {
+    if (day === 'unknown') {
+      sessions.set('unknown', dayFiles);
+      continue;
+    }
+
+    const sorted = [...dayFiles].sort((a, b) =>
+      new Date(a.captureDate).getTime() - new Date(b.captureDate).getTime()
+    );
+
+    if (sorted.length < 2) {
+      sessions.set(day, sorted);
+      continue;
+    }
+
+    // Compute gaps between consecutive files
+    const gaps: number[] = [];
+    for (let i = 1; i < sorted.length; i++) {
+      gaps.push(new Date(sorted[i].captureDate).getTime() - new Date(sorted[i - 1].captureDate).getTime());
+    }
+
+    // Find natural break: biggest ratio jump in sorted gap distribution
+    const sortedGaps = [...gaps].sort((a, b) => a - b);
+    let splitThreshold = Infinity;
+    let bestRatio = 3; // need at least 3x jump
+    for (let i = 1; i < sortedGaps.length; i++) {
+      if (sortedGaps[i] < MIN_SESSION_GAP_MS) continue;
+      const ratio = sortedGaps[i] / Math.max(sortedGaps[i - 1], 1000);
+      if (ratio >= bestRatio) {
+        bestRatio = ratio;
+        splitThreshold = sortedGaps[i];
+      }
+    }
+
+    // Split into sessions at detected gaps
+    let sessionIdx = 0;
+    let currentSession: any[] = [sorted[0]];
+    for (let i = 1; i < sorted.length; i++) {
+      if (gaps[i - 1] >= splitThreshold) {
+        const key = `${day}#${sessionIdx}`;
+        sessions.set(key, currentSession);
+        sessionIdx++;
+        currentSession = [];
+      }
+      currentSession.push(sorted[i]);
+    }
+    const key = sessionIdx === 0 ? day : `${day}#${sessionIdx}`;
+    sessions.set(key, currentSession);
+  }
+
+  return sessions;
+}
+
+function sessionLabel(key: string): string {
+  if (key === 'unknown') return 'Unknown date';
+  const [day, idx] = key.split('#');
+  const dateStr = day.replace(/-/g, '.');
+  if (idx === undefined) return dateStr;
+  const suffix = String.fromCharCode(97 + parseInt(idx)); // a, b, c...
+  return `${dateStr}${suffix}`;
+}
+
+function sessionDatePrefix(key: string): string {
+  const [day, idx] = key.split('#');
+  const dateStr = day.replace(/-/g, '.');
+  if (idx === undefined) return dateStr;
+  const suffix = String.fromCharCode(97 + parseInt(idx));
+  return `${dateStr}${suffix}`;
+}
+
 const spinner = '<span class="inline-block w-2.5 h-2.5 border border-neutral-500 border-t-transparent rounded-full animate-spin shrink-0"></span>';
 
 function renderSourcesPending(sources: { name: string; type: string }[]) {
@@ -318,20 +403,12 @@ async function runScan(skipCheck: boolean) {
       fileTable.classList.remove('hidden');
     }
 
-    // Group by day
-    const byDay = new Map<string, typeof media>();
-    for (const f of media) {
-      const day = f.captureDate
-        ? new Date(f.captureDate).toISOString().slice(0, 10)
-        : 'unknown';
-      const arr = byDay.get(day);
-      if (arr) arr.push(f);
-      else byDay.set(day, [f]);
-    }
-    const sortedDays = [...byDay.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+    // Group by session (time-gap aware)
+    const sessionGroups = detectSessions(media);
+    const sortedSessions = [...sessionGroups.entries()].sort((a, b) => b[0].localeCompare(a[0]));
 
-    fileList.innerHTML = sortedDays.map(([day, files]) => {
-      const label = day === 'unknown' ? 'Unknown date' : day.replace(/-/g, '.');
+    fileList.innerHTML = sortedSessions.map(([key, files]) => {
+      const label = sessionLabel(key);
       const totalSize = files.reduce((s, f) => s + f.size, 0);
       return `
         <details class="border border-neutral-700 rounded-md overflow-hidden">
@@ -382,30 +459,24 @@ async function runScan(skipCheck: boolean) {
       transferSection.classList.remove('hidden');
       transferBtn.textContent = `Transfer ${media.length} files`;
 
-      // Build date groups preview
-      const dateGroups = new Map<string, number>();
-      for (const f of media as any[]) {
-        if (f.captureDate) {
-          const date = new Date(f.captureDate).toISOString().slice(0, 10).replace(/-/g, '.');
-          dateGroups.set(date, (dateGroups.get(date) ?? 0) + 1);
-        }
-      }
-      const sortedDates = [...dateGroups.entries()].sort((a, b) => b[0].localeCompare(a[0]));
-      dateGroupsPreview.innerHTML = sortedDates.map(([date, count]) =>
-        `<label class="inline-flex items-center gap-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-0.5 text-[10px] text-neutral-300 cursor-pointer hover:bg-neutral-700 transition-colors">
-          <input type="checkbox" checked data-date="${date}" class="date-filter-cb accent-blue-500 w-3 h-3" />
-          ${date} <span class="text-neutral-500">(${count})</span>
-        </label>`
-      ).join('');
+      // Build session groups preview
+      const sessionCounts = [...sessionGroups.entries()]
+        .filter(([k]) => k !== 'unknown')
+        .sort((a, b) => b[0].localeCompare(a[0]));
+      dateGroupsPreview.innerHTML = sessionCounts.map(([key, files]) => {
+        const label = sessionLabel(key);
+        const hasMultipleSessions = key.includes('#') || sessionCounts.some(([k]) => k !== key && k.split('#')[0] === key.split('#')[0]);
+        return `<div class="flex items-center gap-1.5 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-[10px] text-neutral-300">
+          <input type="checkbox" checked data-session="${key}" class="date-filter-cb accent-blue-500 w-3 h-3" />
+          <span>${label}</span>
+          <span class="text-neutral-500">(${files.length})</span>
+          ${hasMultipleSessions ? `<input type="text" data-session-topic="${key}" placeholder="topic" class="session-topic bg-neutral-900 border border-neutral-700 rounded px-1.5 py-0.5 text-[10px] w-24 focus:outline-none focus:border-blue-500" />` : ''}
+        </div>`;
+      }).join('');
 
-      // Update transfer button count when date selection changes
+      // Update transfer button count when session selection changes
       dateGroupsPreview.addEventListener('change', () => {
-        const selected = getSelectedDates();
-        const count = missingFiles.filter(f => {
-          if (!f.captureDate) return false;
-          const d = new Date(f.captureDate).toISOString().slice(0, 10).replace(/-/g, '.');
-          return selected.has(d);
-        }).length;
+        const count = getFilteredFiles().length;
         transferBtn.textContent = `Transfer ${count} files`;
       });
 
@@ -527,12 +598,28 @@ transferBtn.addEventListener('click', async () => {
       .filter((g) => g.files.length > 0);
     if (fileGroups.length === 0) return;
   } else {
+    // grouped mode — build session-aware file groups
     dest = basePath;
+    const selected = getSelectedSessions();
+    const sessions = detectSessions(filesToTransfer);
+    const globalTopic = topicInput.value.trim();
+    fileGroups = [];
+    for (const [key, sFiles] of sessions) {
+      if (!selected.has(key)) continue;
+      const topicEl = dateGroupsPreview.querySelector<HTMLInputElement>(`[data-session-topic="${key}"]`);
+      const sessionTopic = topicEl?.value.trim() || globalTopic;
+      const prefix = sessionDatePrefix(key);
+      const folderName = sessionTopic ? `${prefix} - ${sessionTopic}` : prefix;
+      fileGroups.push({ dest: `${basePath}/${folderName}`, files: sFiles });
+    }
+    if (fileGroups.length === 0) return;
   }
 
   const topic = topicInput.value.trim();
   const cancelBtn = $<HTMLButtonElement>('#cancel-transfer-btn');
   transferBtn.disabled = true;
+  scanBtn.disabled = true;
+  instantTransferBtn.disabled = true;
   cancelBtn.classList.remove('hidden');
   progressBar.style.width = '0%';
 
@@ -553,6 +640,8 @@ transferBtn.addEventListener('click', async () => {
     progressLabel.textContent = `Error: ${e.message}`;
   } finally {
     transferBtn.disabled = false;
+    scanBtn.disabled = false;
+    instantTransferBtn.disabled = false;
     cancelBtn.classList.add('hidden');
   }
 });
@@ -566,17 +655,13 @@ $<HTMLButtonElement>('#cancel-transfer-btn').addEventListener('click', () => {
 function suggestTransferMode(
   missing: { captureDate?: string }[],
 ): { mode: string; folderName?: string } {
-  const dates = new Set<string>();
-  for (const f of missing) {
-    if (f.captureDate) {
-      dates.add(new Date(f.captureDate).toISOString().slice(0, 10));
-    }
-  }
+  const sessions = detectSessions(missing);
+  const sessionKeys = [...sessions.keys()].filter(k => k !== 'unknown');
 
-  if (dates.size <= 1) {
-    const date = [...dates][0];
-    const dateStr = date
-      ? date.replace(/-/g, '.')
+  if (sessionKeys.length <= 1) {
+    const key = sessionKeys[0];
+    const dateStr = key
+      ? sessionDatePrefix(key)
       : new Date().toISOString().slice(0, 10).replace(/-/g, '.');
     return { mode: 'new', folderName: `${dateStr} - ` };
   }
@@ -586,19 +671,20 @@ function suggestTransferMode(
 
 // --- Date filtering ---
 
-function getSelectedDates(): Set<string> {
+function getSelectedSessions(): Set<string> {
   const cbs = dateGroupsPreview.querySelectorAll<HTMLInputElement>('.date-filter-cb:checked');
-  return new Set([...cbs].map(cb => cb.dataset.date!));
+  return new Set([...cbs].map(cb => cb.dataset.session!));
 }
 
 function getFilteredFiles(): typeof missingFiles {
-  const selected = getSelectedDates();
+  const selected = getSelectedSessions();
   if (selected.size === 0) return [];
-  return missingFiles.filter(f => {
-    if (!f.captureDate) return false;
-    const d = new Date(f.captureDate).toISOString().slice(0, 10).replace(/-/g, '.');
-    return selected.has(d);
-  });
+  const sessions = detectSessions(missingFiles);
+  const result: any[] = [];
+  for (const [key, files] of sessions) {
+    if (selected.has(key)) result.push(...files);
+  }
+  return result;
 }
 
 // --- Helpers ---

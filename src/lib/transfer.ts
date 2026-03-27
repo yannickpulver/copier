@@ -2,6 +2,11 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { FileInfo } from './types';
 
+async function preserveTimestamps(src: string, dest: string): Promise<void> {
+  const stat = await fs.promises.stat(src);
+  await fs.promises.utimes(dest, stat.atime, stat.mtime);
+}
+
 function resolveCollision(filePath: string): string {
   if (!fs.existsSync(filePath)) return filePath;
 
@@ -32,6 +37,7 @@ export async function copyFiles(
     try {
       const dest = resolveCollision(path.join(destFolder, f.name));
       await fs.promises.copyFile(f.fullPath, dest);
+      await preserveTimestamps(f.fullPath, dest);
     } catch (e: any) {
       errors.push(`${f.name}: ${e.message}`);
     }
@@ -75,6 +81,7 @@ export async function copyFilesGroupedByDate(
       try {
         const dest = resolveCollision(path.join(destFolder, f.name));
         await fs.promises.copyFile(f.fullPath, dest);
+      await preserveTimestamps(f.fullPath, dest);
       } catch (e: any) {
         errors.push(`${f.name}: ${e.message}`);
       }
@@ -116,6 +123,7 @@ export async function copyFilesGroupedByCamera(
       try {
         const dest = resolveCollision(path.join(destFolder, f.name));
         await fs.promises.copyFile(f.fullPath, dest);
+      await preserveTimestamps(f.fullPath, dest);
       } catch (e: any) {
         errors.push(`${f.name}: ${e.message}`);
       }
