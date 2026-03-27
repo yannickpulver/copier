@@ -182,10 +182,9 @@
 
           <label class="flex items-center gap-2 cursor-pointer">
             <input type="radio" name="xfer-mode" value="existing" class="accent-blue-500" />
-            <span class="text-xs">Existing:</span>
-            <select id="existing-folders" class="flex-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500">
-            </select>
+            <span class="text-xs">Existing folder(s):</span>
           </label>
+          <div id="existing-folders" class="hidden pl-6 py-1 flex flex-wrap gap-1 max-h-28 overflow-auto"></div>
 
           <label class="flex items-center gap-2 cursor-pointer">
             <input type="radio" name="xfer-mode" value="grouped" class="accent-blue-500" />

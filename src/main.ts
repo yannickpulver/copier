@@ -235,7 +235,7 @@ ipcMain.handle('list-existing-folders', (_event, nasPath: string) => {
 
 let transferAbort: AbortController | null = null;
 
-ipcMain.handle('transfer', async (_event, files: FileInfo[], dest: string, mode: string, topic?: string, cameraSubfolder?: boolean) => {
+ipcMain.handle('transfer', async (_event, files: FileInfo[], dest: string, mode: string, topic?: string, cameraSubfolder?: boolean, fileGroups?: {dest: string, files: FileInfo[]}[]) => {
   transferAbort = new AbortController();
   const { signal } = transferAbort;
 
@@ -244,6 +244,40 @@ ipcMain.handle('transfer', async (_event, files: FileInfo[], dest: string, mode:
   };
 
   try {
+    // Multi-folder transfer (existing mode with multiple selected folders)
+    if (fileGroups && fileGroups.length > 0) {
+      const allErrors: string[] = [];
+      let done = 0;
+      const totalFiles = fileGroups.reduce((s, g) => s + g.files.length, 0);
+      for (const group of fileGroups) {
+        if (signal.aborted) break;
+        if (cameraSubfolder) {
+          const byCamera = new Map<string, FileInfo[]>();
+          for (const f of group.files) {
+            const cam = f.camera ?? 'Unknown';
+            const arr = byCamera.get(cam);
+            if (arr) arr.push(f);
+            else byCamera.set(cam, [f]);
+          }
+          for (const [camera, cameraFiles] of byCamera) {
+            if (signal.aborted) break;
+            const errors = await copyFiles(cameraFiles, path.join(group.dest, camera), (c, _t, n) => {
+              onProgress(done + c, totalFiles, n);
+            }, signal);
+            done += cameraFiles.length;
+            allErrors.push(...errors);
+          }
+        } else {
+          const errors = await copyFiles(group.files, group.dest, (c, _t, n) => {
+            onProgress(done + c, totalFiles, n);
+          }, signal);
+          done += group.files.length;
+          allErrors.push(...errors);
+        }
+      }
+      return { errors: allErrors, cancelled: signal.aborted };
+    }
+
     if (cameraSubfolder) {
       const byCamera = new Map<string, FileInfo[]>();
       for (const f of files) {

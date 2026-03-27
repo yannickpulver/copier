@@ -73,6 +73,17 @@ export interface SuggestedFolder {
   source: string;
 }
 
+// Walk up to the nearest ancestor whose name starts with YYYY.MM.DD or YYYY-MM-DD
+function toDateLevelFolder(folderPath: string): string {
+  const parts = folderPath.split(path.sep);
+  for (let i = parts.length - 1; i >= 0; i--) {
+    if (/^\d{4}[.\-]\d{2}[.\-]\d{2}/.test(parts[i])) {
+      return parts.slice(0, i + 1).join(path.sep);
+    }
+  }
+  return folderPath;
+}
+
 export function checkBackedUp(
   sdFiles: FileInfo[],
   sourceIndexes: SourceIndex[],
@@ -83,12 +94,14 @@ export function checkBackedUp(
   // Track folder → { count, source }
   const folderInfo = new Map<string, { count: number; source: string }>();
 
-  // Build folder→source lookup
+  // Build folder→source lookup (also index normalized date-level paths)
   const folderToSource = new Map<string, string>();
   for (const si of sourceIndexes) {
     for (const [, paths] of si.index) {
       for (const p of paths) {
         if (!folderToSource.has(p)) folderToSource.set(p, si.name);
+        const top = toDateLevelFolder(p);
+        if (!folderToSource.has(top)) folderToSource.set(top, si.name);
       }
     }
   }
@@ -99,11 +112,12 @@ export function checkBackedUp(
     if (paths) {
       backedUp.push(f);
       for (const p of paths) {
-        const existing = folderInfo.get(p);
+        const top = toDateLevelFolder(p);
+        const existing = folderInfo.get(top);
         if (existing) {
           existing.count++;
         } else {
-          folderInfo.set(p, { count: 1, source: folderToSource.get(p) ?? 'Unknown' });
+          folderInfo.set(top, { count: 1, source: folderToSource.get(p) ?? folderToSource.get(top) ?? 'Unknown' });
         }
       }
     } else {

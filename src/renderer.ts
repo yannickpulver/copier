@@ -16,7 +16,7 @@ declare global {
         sources: { name: string; ok: boolean; error?: string }[];
       }>;
       listExistingFolders: (nasPath: string) => Promise<string[]>;
-      transfer: (files: any[], dest: string, mode: string, topic?: string, cameraSubfolder?: boolean) => Promise<{ errors: string[]; cancelled: boolean }>;
+      transfer: (files: any[], dest: string, mode: string, topic?: string, cameraSubfolder?: boolean, fileGroups?: {dest: string, files: any[]}[]) => Promise<{ errors: string[]; cancelled: boolean }>;
       cancelTransfer: () => Promise<void>;
       testSynology: (host: string, port: number, user: string, pass: string, secure: boolean, folders: string) => Promise<{ ok: boolean; error?: string }>;
       describeImage: (filePath: string) => Promise<{ ok: boolean; description?: string; error?: string }>;
@@ -41,7 +41,7 @@ const status = $('#status');
 const fileList = $<HTMLDivElement>('#file-list');
 const transferSection = $('#transfer-section');
 const newFolderInput = $<HTMLInputElement>('#new-folder-name');
-const existingSelect = $<HTMLSelectElement>('#existing-folders');
+const existingSelect = $<HTMLDivElement>('#existing-folders');
 const topicInput = $<HTMLInputElement>('#topic');
 const dateGroupsPreview = $('#date-groups-preview');
 const transferDest = $<HTMLSelectElement>('#transfer-dest');
@@ -183,10 +183,48 @@ async function refreshExistingFolders() {
     return;
   }
   const folders = await window.api.listExistingFolders(dest);
-  existingSelect.innerHTML = folders
-    .map((f) => `<option value="${f}">${f}</option>`)
+  if (missingFiles.length > 0) {
+    renderDateFolderMappings(missingFiles, folders);
+  } else {
+    existingSelect.innerHTML = '';
+  }
+}
+
+function groupFilesByDate(files: any[]): Map<string, any[]> {
+  const groups = new Map<string, any[]>();
+  for (const f of files) {
+    const date = f.captureDate
+      ? new Date(f.captureDate).toISOString().slice(0, 10).replace(/-/g, '.')
+      : 'unknown';
+    const arr = groups.get(date);
+    if (arr) arr.push(f);
+    else groups.set(date, [f]);
+  }
+  return groups;
+}
+
+function renderDateFolderMappings(files: any[], existingFolders: string[]) {
+  const groups = groupFilesByDate(files);
+  const reversedFolders = [...existingFolders].reverse();
+  const folderOptions = [
+    '<option value="">— skip —</option>',
+    ...reversedFolders.map((f) => `<option value="${escapeHtml(f)}">${escapeHtml(f)}</option>`),
+  ].join('');
+
+  existingSelect.innerHTML = [...groups.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, dateFiles]) => {
+      const match = reversedFolders.find((f) => f.startsWith(date)) ?? '';
+      const opts = folderOptions.replace(
+        `value="${escapeHtml(match)}"`,
+        `value="${escapeHtml(match)}" selected`,
+      );
+      return `<div class="flex items-center gap-2" data-date="${escapeHtml(date)}">
+        <span class="text-[11px] text-neutral-400 w-28 shrink-0">${escapeHtml(date)} <span class="text-neutral-500">(${dateFiles.length})</span></span>
+        <select class="date-folder-select flex-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-0.5 text-[11px] text-neutral-300 focus:outline-none focus:border-blue-500">${opts}</select>
+      </div>`;
+    })
     .join('');
-  if (folders.length) existingSelect.value = folders[folders.length - 1];
 }
 
 // --- Scan ---
@@ -354,8 +392,22 @@ async function runScan(skipCheck: boolean) {
       }
       const sortedDates = [...dateGroups.entries()].sort((a, b) => b[0].localeCompare(a[0]));
       dateGroupsPreview.innerHTML = sortedDates.map(([date, count]) =>
-        `<span class="bg-neutral-800 border border-neutral-700 rounded px-2 py-0.5 text-[10px] text-neutral-300">${date} <span class="text-neutral-500">(${count})</span></span>`
+        `<label class="inline-flex items-center gap-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-0.5 text-[10px] text-neutral-300 cursor-pointer hover:bg-neutral-700 transition-colors">
+          <input type="checkbox" checked data-date="${date}" class="date-filter-cb accent-blue-500 w-3 h-3" />
+          ${date} <span class="text-neutral-500">(${count})</span>
+        </label>`
       ).join('');
+
+      // Update transfer button count when date selection changes
+      dateGroupsPreview.addEventListener('change', () => {
+        const selected = getSelectedDates();
+        const count = missingFiles.filter(f => {
+          if (!f.captureDate) return false;
+          const d = new Date(f.captureDate).toISOString().slice(0, 10).replace(/-/g, '.');
+          return selected.has(d);
+        }).length;
+        transferBtn.textContent = `Transfer ${count} files`;
+      });
 
       // Show camera subfolder option if cameras detected
       const cameras = new Set(media.map((f: any) => f.camera).filter(Boolean));
@@ -368,37 +420,31 @@ async function runScan(skipCheck: boolean) {
         cameraSubfolderOption.classList.add('hidden');
       }
 
-      // Smart transfer suggestion
-      const suggestion = suggestTransferMode(media, result.suggestedFolders);
-
-      // Set transfer destination if not already set
-
-      // Populate existing folders from transfer dest if it's set
+      // Populate existing folders from transfer dest with date-group mapping
       const destPath = transferDest.value;
       if (destPath) {
         const folders = await window.api.listExistingFolders(destPath);
-        existingSelect.innerHTML = folders
-          .map((f) => `<option value="${f}">${f}</option>`)
-          .join('');
+        renderDateFolderMappings(media, folders);
+      }
 
-        if (suggestion.mode === 'existing' && suggestion.folder) {
-          const name = suggestion.folder.split('/').pop() ?? '';
-          if (folders.includes(name)) {
-            existingSelect.value = name;
-          }
-        } else if (folders.length) {
-          existingSelect.value = folders[folders.length - 1];
+      // Determine transfer mode suggestion
+      const hasMapping = [...existingSelect.querySelectorAll<HTMLSelectElement>('.date-folder-select')]
+        .some((s) => s.value !== '');
+      let suggestedMode: string;
+      if (hasMapping) {
+        suggestedMode = 'existing';
+      } else {
+        const suggestion = suggestTransferMode(media);
+        suggestedMode = suggestion.mode;
+        if (suggestion.folderName) {
+          newFolderInput.value = suggestion.folderName;
         }
       }
 
-      // Apply suggestion
-      const radio = document.querySelector<HTMLInputElement>(`input[name="xfer-mode"][value="${suggestion.mode}"]`);
+      const radio = document.querySelector<HTMLInputElement>(`input[name="xfer-mode"][value="${suggestedMode}"]`);
       if (radio) radio.checked = true;
-      dateGroupsPreview.classList.toggle('hidden', suggestion.mode !== 'grouped');
-
-      if (suggestion.mode === 'new' && suggestion.folderName) {
-        newFolderInput.value = suggestion.folderName;
-      }
+      dateGroupsPreview.classList.toggle('hidden', suggestedMode !== 'grouped');
+      existingSelect.classList.toggle('hidden', suggestedMode !== 'existing');
 
       // Gemini: describe a sample image to suggest a topic
       const geminiKey = await window.api.getSetting('geminiKey');
@@ -439,6 +485,7 @@ document.querySelectorAll<HTMLInputElement>('input[name="xfer-mode"]').forEach((
   radio.addEventListener('change', () => {
     const selected = document.querySelector<HTMLInputElement>('input[name="xfer-mode"]:checked');
     dateGroupsPreview.classList.toggle('hidden', selected?.value !== 'grouped');
+    existingSelect.classList.toggle('hidden', selected?.value !== 'existing');
   });
 });
 
@@ -451,21 +498,34 @@ window.api.onTransferProgress(({ current, total }) => {
 });
 
 transferBtn.addEventListener('click', async () => {
-  if (!missingFiles.length) return;
+  const mode = (document.querySelector<HTMLInputElement>('input[name="xfer-mode"]:checked'))?.value ?? 'new';
+  const filesToTransfer = mode === 'grouped' ? getFilteredFiles() : missingFiles;
+  if (!filesToTransfer.length) return;
 
   const basePath = transferDest.value;
   if (!basePath) return;
-  const mode = (document.querySelector<HTMLInputElement>('input[name="xfer-mode"]:checked'))?.value ?? 'new';
 
   let dest: string;
+  let fileGroups: {dest: string, files: any[]}[] | undefined;
   if (mode === 'new') {
     const name = newFolderInput.value.trim();
     if (!name) return;
     dest = `${basePath}/${name}`;
   } else if (mode === 'existing') {
-    const name = existingSelect.value;
-    if (!name) return;
-    dest = `${basePath}/${name}`;
+    const rows = [...existingSelect.querySelectorAll<HTMLDivElement>('[data-date]')];
+    const mappings = rows
+      .map((row) => ({
+        date: row.dataset.date!,
+        folder: row.querySelector<HTMLSelectElement>('.date-folder-select')!.value,
+      }))
+      .filter((m) => m.folder);
+    if (mappings.length === 0) return;
+    const filesByDate = groupFilesByDate(filesToTransfer);
+    dest = basePath;
+    fileGroups = mappings
+      .map((m) => ({ dest: `${basePath}/${m.folder}`, files: filesByDate.get(m.date) ?? [] }))
+      .filter((g) => g.files.length > 0);
+    if (fileGroups.length === 0) return;
   } else {
     dest = basePath;
   }
@@ -478,7 +538,7 @@ transferBtn.addEventListener('click', async () => {
 
   try {
     const cameraSubfolder = $<HTMLInputElement>('#camera-subfolder').checked;
-    const result = await window.api.transfer(missingFiles, dest, mode, topic, cameraSubfolder);
+    const result = await window.api.transfer(filesToTransfer, dest, mode, topic, cameraSubfolder, fileGroups);
     if (result.cancelled) {
       progressLabel.textContent = 'Cancelled';
       status.textContent = 'Transfer cancelled';
@@ -505,9 +565,7 @@ $<HTMLButtonElement>('#cancel-transfer-btn').addEventListener('click', () => {
 
 function suggestTransferMode(
   missing: { captureDate?: string }[],
-  suggestedFolders: { folder: string; count: number }[],
-): { mode: string; folder?: string; folderName?: string } {
-  // Get unique dates from missing files
+): { mode: string; folderName?: string } {
   const dates = new Set<string>();
   for (const f of missing) {
     if (f.captureDate) {
@@ -515,21 +573,7 @@ function suggestTransferMode(
     }
   }
 
-  // Check if any suggested folder's date matches a missing file date
-  for (const sf of suggestedFolders) {
-    const folderName = sf.folder.split('/').pop() ?? '';
-    const m = folderName.match(/^(\d{4})\.(\d{2})\.(\d{2})/);
-    if (m) {
-      const folderDate = `${m[1]}-${m[2]}-${m[3]}`;
-      if (dates.has(folderDate)) {
-        return { mode: 'existing', folder: sf.folder };
-      }
-    }
-  }
-
-  // No date match in existing folders → new folder or grouped
   if (dates.size <= 1) {
-    // Use the missing files' date, not today's date
     const date = [...dates][0];
     const dateStr = date
       ? date.replace(/-/g, '.')
@@ -537,8 +581,24 @@ function suggestTransferMode(
     return { mode: 'new', folderName: `${dateStr} - ` };
   }
 
-  // Multiple dates → group by date
   return { mode: 'grouped' };
+}
+
+// --- Date filtering ---
+
+function getSelectedDates(): Set<string> {
+  const cbs = dateGroupsPreview.querySelectorAll<HTMLInputElement>('.date-filter-cb:checked');
+  return new Set([...cbs].map(cb => cb.dataset.date!));
+}
+
+function getFilteredFiles(): typeof missingFiles {
+  const selected = getSelectedDates();
+  if (selected.size === 0) return [];
+  return missingFiles.filter(f => {
+    if (!f.captureDate) return false;
+    const d = new Date(f.captureDate).toISOString().slice(0, 10).replace(/-/g, '.');
+    return selected.has(d);
+  });
 }
 
 // --- Helpers ---
