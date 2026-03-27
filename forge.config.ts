@@ -11,6 +11,7 @@ import { PublisherGithub } from '@electron-forge/publisher-github';
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
+    icon: './assets/icon',
     ...(process.env.APPLE_ID ? {
       osxSign: {},
       osxNotarize: {
