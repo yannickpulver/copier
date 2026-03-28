@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, powerSaveBlocker } from 'electron';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
 import { updateElectronApp } from 'update-electron-app';
@@ -238,6 +238,7 @@ let transferAbort: AbortController | null = null;
 ipcMain.handle('transfer', async (_event, files: FileInfo[], dest: string, mode: string, topic?: string, cameraSubfolder?: boolean, fileGroups?: {dest: string, files: FileInfo[]}[]) => {
   transferAbort = new AbortController();
   const { signal } = transferAbort;
+  const sleepBlockId = powerSaveBlocker.start('prevent-app-suspension');
 
   const onProgress = (current: number, total: number, name: string) => {
     mainWindow?.webContents.send('transfer-progress', { current, total, name });
@@ -315,6 +316,7 @@ ipcMain.handle('transfer', async (_event, files: FileInfo[], dest: string, mode:
     }
     return { errors, cancelled: signal.aborted };
   } finally {
+    powerSaveBlocker.stop(sleepBlockId);
     transferAbort = null;
   }
 });

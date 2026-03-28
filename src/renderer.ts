@@ -269,7 +269,7 @@ async function refreshExistingFolders() {
   }
   const folders = await window.api.listExistingFolders(dest);
   if (missingFiles.length > 0) {
-    renderDateFolderMappings(missingFiles, folders);
+    renderSessionFolderMappings(missingFiles, folders);
   } else {
     existingSelect.innerHTML = '';
   }
@@ -288,24 +288,26 @@ function groupFilesByDate(files: any[]): Map<string, any[]> {
   return groups;
 }
 
-function renderDateFolderMappings(files: any[], existingFolders: string[]) {
-  const groups = groupFilesByDate(files);
+function renderSessionFolderMappings(files: any[], existingFolders: string[]) {
+  const sessions = detectSessions(files);
   const reversedFolders = [...existingFolders].reverse();
   const folderOptions = [
     '<option value="">— skip —</option>',
     ...reversedFolders.map((f) => `<option value="${escapeHtml(f)}">${escapeHtml(f)}</option>`),
   ].join('');
 
-  existingSelect.innerHTML = [...groups.entries()]
+  existingSelect.innerHTML = [...sessions.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, dateFiles]) => {
-      const match = reversedFolders.find((f) => f.startsWith(date)) ?? '';
+    .map(([key, sessionFiles]) => {
+      const label = sessionLabel(key);
+      const datePrefix = key.split('#')[0].replace(/-/g, '.');
+      const match = reversedFolders.find((f) => f.startsWith(datePrefix)) ?? '';
       const opts = folderOptions.replace(
         `value="${escapeHtml(match)}"`,
         `value="${escapeHtml(match)}" selected`,
       );
-      return `<div class="flex items-center gap-2" data-date="${escapeHtml(date)}">
-        <span class="text-[11px] text-neutral-400 w-28 shrink-0">${escapeHtml(date)} <span class="text-neutral-500">(${dateFiles.length})</span></span>
+      return `<div class="flex items-center gap-2" data-session="${escapeHtml(key)}">
+        <span class="text-[11px] text-neutral-400 w-28 shrink-0">${escapeHtml(label)} <span class="text-neutral-500">(${sessionFiles.length})</span></span>
         <select class="date-folder-select flex-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-0.5 text-[11px] text-neutral-300 focus:outline-none focus:border-blue-500">${opts}</select>
       </div>`;
     })
@@ -495,7 +497,7 @@ async function runScan(skipCheck: boolean) {
       const destPath = transferDest.value;
       if (destPath) {
         const folders = await window.api.listExistingFolders(destPath);
-        renderDateFolderMappings(media, folders);
+        renderSessionFolderMappings(media, folders);
       }
 
       // Determine transfer mode suggestion
@@ -583,18 +585,18 @@ transferBtn.addEventListener('click', async () => {
     if (!name) return;
     dest = `${basePath}/${name}`;
   } else if (mode === 'existing') {
-    const rows = [...existingSelect.querySelectorAll<HTMLDivElement>('[data-date]')];
+    const rows = [...existingSelect.querySelectorAll<HTMLDivElement>('[data-session]')];
     const mappings = rows
       .map((row) => ({
-        date: row.dataset.date!,
+        session: row.dataset.session!,
         folder: row.querySelector<HTMLSelectElement>('.date-folder-select')!.value,
       }))
       .filter((m) => m.folder);
     if (mappings.length === 0) return;
-    const filesByDate = groupFilesByDate(filesToTransfer);
+    const sessions = detectSessions(filesToTransfer);
     dest = basePath;
     fileGroups = mappings
-      .map((m) => ({ dest: `${basePath}/${m.folder}`, files: filesByDate.get(m.date) ?? [] }))
+      .map((m) => ({ dest: `${basePath}/${m.folder}`, files: sessions.get(m.session) ?? [] }))
       .filter((g) => g.files.length > 0);
     if (fileGroups.length === 0) return;
   } else {
