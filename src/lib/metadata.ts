@@ -8,6 +8,10 @@ const EXIF_EXTS = new Set([
   '.heic', '.heif', '.png',
 ]);
 
+const RAW_EXTS = new Set([
+  '.cr3', '.cr2', '.arw', '.nef', '.dng', '.raf', '.orf', '.rw2',
+]);
+
 const VIDEO_EXTS = new Set(['.mp4', '.mov', '.m4v', '.avi', '.mts']);
 
 interface MetadataResult {
@@ -34,12 +38,14 @@ async function extractMetadata(filePath: string): Promise<MetadataResult> {
 
   if (EXIF_EXTS.has(ext) || VIDEO_EXTS.has(ext)) {
     try {
-      // Read only first 128KB — enough for EXIF headers, avoids loading 20MB+ RAW files
+      // RAW files (especially CR3/ISOBMFF) store EXIF beyond 128KB — read more for those
+      const isRaw = RAW_EXTS.has(ext);
       const fh = await fs.promises.open(filePath, 'r');
-      const buffer = Buffer.alloc(128 * 1024);
-      await fh.read(buffer, 0, buffer.length, 0);
+      const readSize = isRaw ? 1024 * 1024 : 128 * 1024;
+      const buffer = Buffer.alloc(readSize);
+      const { bytesRead } = await fh.read(buffer, 0, readSize, 0);
       await fh.close();
-      const tags = ExifReader.load(buffer, { expanded: true, excludeXmp: true });
+      const tags = ExifReader.load(buffer.subarray(0, bytesRead), { expanded: true, excludeXmp: true });
 
       const dateStr =
         tags.exif?.DateTimeOriginal?.description ??
