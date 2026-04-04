@@ -10,6 +10,7 @@ import { SynologyClient } from './lib/synology';
 import { loadSynologyConfig, resolveOpReference } from './lib/credentials';
 import { enrichMetadata } from './lib/metadata';
 import { copyFiles, copyFilesGroupedByDate } from './lib/transfer';
+import { walkFolder, diffFolders, syncFiles } from './lib/sync';
 import type { SynologyConfig, FileInfo } from './lib/types';
 import { getSetting, setSetting } from './lib/store';
 
@@ -423,4 +424,49 @@ ipcMain.handle('browse-folder', async (_event, defaultPath?: string) => {
     defaultPath,
   });
   return result.canceled ? null : result.filePaths[0];
+});
+
+// --- Folder Sync ---
+
+ipcMain.handle('sync-scan', async (_event, sourcePath: string, destPath: string) => {
+  mainWindow?.webContents.send('sync-progress', { step: 'source', count: 0, folder: 'Scanning source...' });
+  const sourceFiles = await walkFolder(sourcePath, (count, folder) => {
+    mainWindow?.webContents.send('sync-progress', { step: 'source', count, folder });
+  });
+
+  mainWindow?.webContents.send('sync-progress', { step: 'dest', count: 0, folder: 'Scanning destination...' });
+  const destFiles = await walkFolder(destPath, (count, folder) => {
+    mainWindow?.webContents.send('sync-progress', { step: 'dest', count, folder });
+  });
+
+  const diff = diffFolders(sourceFiles, destFiles);
+  return {
+    added: diff.added,
+    changed: diff.changed,
+    unchanged: diff.unchanged,
+    sourceTotal: sourceFiles.length,
+    destTotal: destFiles.length,
+  };
+});
+
+let syncAbort: AbortController | null = null;
+
+ipcMain.handle('sync-transfer', async (_event, files: any[], destRoot: string) => {
+  syncAbort = new AbortController();
+  const { signal } = syncAbort;
+  const sleepBlockId = powerSaveBlocker.start('prevent-app-suspension');
+
+  try {
+    const errors = await syncFiles(files, destRoot, (current, total, name) => {
+      mainWindow?.webContents.send('sync-transfer-progress', { current, total, name });
+    }, signal);
+    return { errors, cancelled: signal.aborted };
+  } finally {
+    powerSaveBlocker.stop(sleepBlockId);
+    syncAbort = null;
+  }
+});
+
+ipcMain.handle('cancel-sync', () => {
+  syncAbort?.abort();
 });

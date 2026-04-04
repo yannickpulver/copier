@@ -27,6 +27,18 @@ declare global {
       setSetting: (key: string, value: any) => Promise<void>;
       onScanProgress: (cb: (data: { step: string; count: number; folder: string }) => void) => () => void;
       onTransferProgress: (cb: (data: { current: number; total: number; name: string }) => void) => () => void;
+      // Folder Sync
+      syncScan: (sourcePath: string, destPath: string) => Promise<{
+        added: { relPath: string; fullPath: string; name: string; size: number; mtime: number }[];
+        changed: { relPath: string; fullPath: string; name: string; size: number; mtime: number }[];
+        unchanged: number;
+        sourceTotal: number;
+        destTotal: number;
+      }>;
+      syncTransfer: (files: any[], destRoot: string) => Promise<{ errors: string[]; cancelled: boolean }>;
+      cancelSync: () => Promise<void>;
+      onSyncProgress: (cb: (data: { step: string; count: number; folder: string }) => void) => () => void;
+      onSyncTransferProgress: (cb: (data: { current: number; total: number; name: string }) => void) => () => void;
     };
   }
 }
@@ -209,6 +221,7 @@ async function init() {
       window.api.setSetting('transferDests', transferDests);
     }
     populateTransferDests();
+    populateSyncDests();
   });
 
   const sdPromise = refreshSdCards().then(() => {
@@ -424,7 +437,7 @@ async function runScan(skipCheck: boolean) {
               ${files.map((f: any) => `
                 <tr class="hover:bg-neutral-800/50 cursor-pointer" data-path="${escapeHtml(f.fullPath)}">
                   <td class="px-3 py-1.5">${escapeHtml(f.name)}</td>
-                  <td class="px-3 py-1.5 text-right text-neutral-400 w-16">${formatSize(f.size)}</td>
+                  <td class="px-3 py-1.5 text-right text-neutral-400 w-20 whitespace-nowrap">${formatSize(f.size)}</td>
                   <td class="px-3 py-1.5 text-center text-neutral-400 w-20 truncate">${f.camera ? escapeHtml(f.camera) : ''}</td>
                   <td class="px-3 py-1.5 text-right text-neutral-500 w-12 text-[10px]">${f.captureDate ? formatTime(f.captureDate) : ''}</td>
                 </tr>
@@ -767,7 +780,7 @@ settingsToggle.addEventListener('click', async () => {
   const isOpen = !settingsPanel.classList.contains('hidden');
   if (isOpen) {
     settingsPanel.classList.add('hidden');
-    mainContent.classList.remove('hidden');
+    showActiveTab();
   } else {
     const cfgPathsList = document.getElementById('cfg-paths-list')!;
     const cfgDestsList = document.getElementById('cfg-dests-list')!;
@@ -803,6 +816,7 @@ settingsToggle.addEventListener('click', async () => {
     updateCardSummaries(host ?? '', folders ?? '', geminiKey ?? '');
 
     mainContent.classList.add('hidden');
+    syncContent.classList.add('hidden');
     settingsPanel.classList.remove('hidden');
   }
 });
@@ -900,14 +914,280 @@ cfgSave.addEventListener('click', async () => {
     window.api.setSetting('geminiKey', $<HTMLInputElement>('#cfg-gemini-key').value || undefined),
   ]);
 
-  // Sync transfer dests to main screen
+  // Sync transfer dests to main screen + sync tab
   transferDests = [...currentTransferDests];
   populateTransferDests();
+  populateSyncDests();
 
   settingsPanel.classList.add('hidden');
-  mainContent.classList.remove('hidden');
+  showActiveTab();
 
   window.api.checkSourcesStatus();
 });
+
+// --- Tab switching ---
+
+const tabBtns = document.querySelectorAll<HTMLButtonElement>('.tab-btn');
+const syncContent = document.getElementById('sync-content')!;
+let activeTab = 'backup';
+
+function showActiveTab() {
+  mainContent.classList.toggle('hidden', activeTab !== 'backup');
+  syncContent.classList.toggle('hidden', activeTab !== 'sync');
+}
+
+tabBtns.forEach((btn) => {
+  btn.addEventListener('click', () => {
+    activeTab = btn.dataset.tab!;
+    tabBtns.forEach((b) => {
+      b.classList.toggle('bg-neutral-700', b.dataset.tab === activeTab);
+      b.classList.toggle('text-neutral-200', b.dataset.tab === activeTab);
+      b.classList.toggle('text-neutral-500', b.dataset.tab !== activeTab);
+    });
+    settingsPanel.classList.add('hidden');
+    showActiveTab();
+  });
+});
+
+// --- Folder Sync ---
+
+const syncSourceLabel = document.getElementById('sync-source-label')!;
+const syncSourceDrop = document.getElementById('sync-source-drop')!;
+const syncDestSelect = $<HTMLSelectElement>('#sync-dest-select');
+const syncScanBtn = $<HTMLButtonElement>('#sync-scan-btn');
+const syncStatus = document.getElementById('sync-status')!;
+const syncResults = document.getElementById('sync-results')!;
+const syncDiffList = document.getElementById('sync-diff-list')!;
+const syncAllSynced = document.getElementById('sync-all-synced')!;
+const syncTransferSection = document.getElementById('sync-transfer-section')!;
+const syncTransferBtn = $<HTMLButtonElement>('#sync-transfer-btn');
+const syncCancelBtn = $<HTMLButtonElement>('#sync-cancel-btn');
+const syncProgressBar = $<HTMLDivElement>('#sync-progress-bar');
+const syncProgressLabel = document.getElementById('sync-progress-label')!;
+
+let syncSource = '';
+let syncFilesToTransfer: any[] = [];
+
+function syncEffectiveDest(): string {
+  const base = syncDestSelect.value;
+  if (!base || !syncSource) return base;
+  const folderName = syncSource.split('/').pop() ?? syncSource;
+  const destFolderName = base.split('/').pop() ?? '';
+  // If dest already ends with the source folder name, use it directly
+  if (destFolderName === folderName) return base;
+  return `${base}/${folderName}`;
+}
+
+function updateSyncDestHint() {
+  const hint = document.getElementById('sync-dest-hint')!;
+  const transferHint = document.getElementById('sync-transfer-hint')!;
+  if (!syncSource || !syncDestSelect.value) {
+    hint.textContent = '';
+    transferHint.textContent = '';
+    return;
+  }
+  const dest = syncEffectiveDest();
+  const short = dest.split('/').slice(-2).join('/');
+  hint.textContent = `→ ${short}/`;
+  transferHint.textContent = `Will sync to ${dest}`;
+}
+
+function setSyncSource(p: string) {
+  syncSource = p;
+  syncSourceLabel.textContent = p;
+  syncSourceLabel.classList.remove('text-neutral-400');
+  syncSourceLabel.classList.add('text-neutral-200');
+  window.api.setSetting('syncSource', p);
+  syncScanBtn.disabled = !syncSource || !syncDestSelect.value;
+  updateSyncDestHint();
+}
+
+function populateSyncDests() {
+  syncDestSelect.innerHTML = transferDests.length
+    ? transferDests.map((d) => `<option value="${escapeHtml(d)}">${escapeHtml(d.split('/').pop() ?? d)}</option>`).join('')
+    : '<option value="">No destinations — open Settings</option>';
+  syncScanBtn.disabled = !syncSource || !syncDestSelect.value;
+  updateSyncDestHint();
+}
+
+async function loadSyncPaths() {
+  const src = await window.api.getSetting('syncSource');
+  if (src) setSyncSource(src);
+  populateSyncDests();
+}
+
+// Drag & drop for source
+syncSourceDrop.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  syncSourceDrop.classList.replace('border-neutral-700', 'border-blue-500');
+});
+syncSourceDrop.addEventListener('dragleave', () => {
+  syncSourceDrop.classList.replace('border-blue-500', 'border-neutral-700');
+});
+syncSourceDrop.addEventListener('drop', (e) => {
+  e.preventDefault();
+  syncSourceDrop.classList.replace('border-blue-500', 'border-neutral-700');
+  const file = e.dataTransfer?.files[0];
+  if (file) setSyncSource(file.path);
+});
+
+document.getElementById('sync-browse-source')!.addEventListener('click', async () => {
+  const p = await window.api.browseFolder(syncSource || undefined);
+  if (p) setSyncSource(p);
+});
+
+document.getElementById('sync-browse-dest')!.addEventListener('click', async () => {
+  const p = await window.api.browseFolder(syncDestSelect.value || undefined);
+  if (p && !transferDests.includes(p)) {
+    transferDests.push(p);
+    window.api.setSetting('transferDests', transferDests);
+    populateSyncDests();
+    populateTransferDests();
+    syncDestSelect.value = p;
+  }
+});
+
+syncDestSelect.addEventListener('change', () => {
+  syncScanBtn.disabled = !syncSource || !syncDestSelect.value;
+  updateSyncDestHint();
+  resetSyncResults();
+});
+
+window.api.onSyncProgress(({ step, count, folder }) => {
+  syncStatus.textContent = `${step === 'source' ? 'Source' : 'Dest'}: ${count} files — ${folder}`;
+});
+
+window.api.onSyncTransferProgress(({ current, total }) => {
+  const pct = total > 0 ? (current / total) * 100 : 0;
+  syncProgressBar.style.width = `${pct}%`;
+  syncProgressLabel.textContent = `${current}/${total}`;
+});
+
+function resetSyncResults() {
+  syncFilesToTransfer = [];
+  syncDiffList.innerHTML = '';
+  syncResults.classList.add('hidden');
+  syncAllSynced.classList.add('hidden');
+  syncTransferSection.classList.add('hidden');
+  syncProgressBar.style.width = '0%';
+  syncProgressLabel.textContent = '';
+  syncStatus.textContent = '';
+}
+
+syncScanBtn.addEventListener('click', async () => {
+  if (!syncSource || !syncDestSelect.value) return;
+
+  syncScanBtn.disabled = true;
+  syncStatus.textContent = 'Scanning...';
+  resetSyncResults();
+
+  try {
+    const result = await window.api.syncScan(syncSource, syncEffectiveDest());
+    const allDiff = [...result.added, ...result.changed];
+    syncFilesToTransfer = allDiff;
+
+    syncStatus.textContent = `${result.sourceTotal} source, ${result.destTotal} dest — ${result.added.length} new, ${result.changed.length} changed, ${result.unchanged} unchanged`;
+
+    if (allDiff.length === 0) {
+      syncAllSynced.classList.remove('hidden');
+    } else {
+      syncResults.classList.remove('hidden');
+      syncTransferSection.classList.remove('hidden');
+      syncTransferBtn.textContent = `Sync ${allDiff.length} files`;
+
+      // Render added files
+      let html = '';
+      if (result.added.length > 0) {
+        html += `
+          <details open class="border border-neutral-700 rounded-md overflow-hidden">
+            <summary class="flex items-center gap-3 px-3 py-2 bg-neutral-800/50 hover:bg-neutral-800 cursor-pointer text-xs">
+              <span class="font-medium text-green-400">New</span>
+              <span class="text-neutral-500">${result.added.length} file${result.added.length > 1 ? 's' : ''}</span>
+              <span class="text-neutral-500 ml-auto">${formatSize(result.added.reduce((s, f) => s + f.size, 0))}</span>
+            </summary>
+            <table class="w-full text-xs">
+              <tbody class="divide-y divide-neutral-800">
+                ${result.added.map((f) => `
+                  <tr class="hover:bg-neutral-800/50 cursor-pointer" data-path="${escapeHtml(f.fullPath)}">
+                    <td class="px-3 py-1.5 truncate max-w-xs">${escapeHtml(f.relPath)}</td>
+                    <td class="px-3 py-1.5 text-right text-neutral-400 w-20 whitespace-nowrap">${formatSize(f.size)}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </details>
+        `;
+      }
+      if (result.changed.length > 0) {
+        html += `
+          <details open class="border border-neutral-700 rounded-md overflow-hidden mt-1">
+            <summary class="flex items-center gap-3 px-3 py-2 bg-neutral-800/50 hover:bg-neutral-800 cursor-pointer text-xs">
+              <span class="font-medium text-yellow-400">Changed</span>
+              <span class="text-neutral-500">${result.changed.length} file${result.changed.length > 1 ? 's' : ''}</span>
+              <span class="text-neutral-500 ml-auto">${formatSize(result.changed.reduce((s, f) => s + f.size, 0))}</span>
+            </summary>
+            <table class="w-full text-xs">
+              <tbody class="divide-y divide-neutral-800">
+                ${result.changed.map((f) => `
+                  <tr class="hover:bg-neutral-800/50 cursor-pointer" data-path="${escapeHtml(f.fullPath)}">
+                    <td class="px-3 py-1.5 truncate max-w-xs">${escapeHtml(f.relPath)}</td>
+                    <td class="px-3 py-1.5 text-right text-neutral-400 w-20 whitespace-nowrap">${formatSize(f.size)}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </details>
+        `;
+      }
+      syncDiffList.innerHTML = html;
+
+      // Click to reveal
+      syncDiffList.addEventListener('click', (e) => {
+        const row = (e.target as HTMLElement).closest('tr');
+        if (row?.dataset.path) window.api.revealFile(row.dataset.path);
+      });
+    }
+  } catch (e: any) {
+    syncStatus.textContent = `Error: ${e.message}`;
+  } finally {
+    syncScanBtn.disabled = false;
+  }
+});
+
+syncTransferBtn.addEventListener('click', async () => {
+  if (!syncFilesToTransfer.length || !syncDestSelect.value) return;
+
+  syncTransferBtn.disabled = true;
+  syncScanBtn.disabled = true;
+  syncCancelBtn.classList.remove('hidden');
+  syncProgressBar.style.width = '0%';
+
+  try {
+    const result = await window.api.syncTransfer(syncFilesToTransfer, syncEffectiveDest());
+    if (result.cancelled) {
+      syncProgressLabel.textContent = 'Cancelled';
+      syncStatus.textContent = 'Sync cancelled';
+    } else if (result.errors.length > 0) {
+      syncProgressLabel.textContent = `${result.errors.length} failed`;
+      syncStatus.textContent = `Sync failed: ${result.errors[0]}${result.errors.length > 1 ? ` (+${result.errors.length - 1} more)` : ''}`;
+    } else {
+      syncProgressBar.style.width = '100%';
+      syncProgressLabel.textContent = 'Done!';
+      syncStatus.textContent = 'Sync complete';
+    }
+  } catch (e: any) {
+    syncProgressLabel.textContent = `Error: ${e.message}`;
+  } finally {
+    syncTransferBtn.disabled = false;
+    syncScanBtn.disabled = false;
+    syncCancelBtn.classList.add('hidden');
+  }
+});
+
+syncCancelBtn.addEventListener('click', () => {
+  window.api.cancelSync();
+});
+
+loadSyncPaths();
 
 init();

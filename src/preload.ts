@@ -42,4 +42,20 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('transfer-progress', listener);
     return () => ipcRenderer.removeListener('transfer-progress', listener);
   },
+  // Folder Sync
+  syncScan: (sourcePath: string, destPath: string) =>
+    ipcRenderer.invoke('sync-scan', sourcePath, destPath),
+  syncTransfer: (files: any[], destRoot: string) =>
+    ipcRenderer.invoke('sync-transfer', files, destRoot),
+  cancelSync: () => ipcRenderer.invoke('cancel-sync'),
+  onSyncProgress: (cb: (data: any) => void) => {
+    const listener = (_event: any, data: any) => cb(data);
+    ipcRenderer.on('sync-progress', listener);
+    return () => ipcRenderer.removeListener('sync-progress', listener);
+  },
+  onSyncTransferProgress: (cb: (data: any) => void) => {
+    const listener = (_event: any, data: any) => cb(data);
+    ipcRenderer.on('sync-transfer-progress', listener);
+    return () => ipcRenderer.removeListener('sync-transfer-progress', listener);
+  },
 });

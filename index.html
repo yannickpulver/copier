@@ -7,9 +7,13 @@
   </head>
   <body class="bg-neutral-900 text-neutral-100 font-sans text-sm select-none">
     <div id="app" class="flex flex-col h-screen">
-      <!-- Drag region + settings toggle -->
-      <div class="shrink-0 flex items-center justify-end px-4 pt-3 pb-1" style="-webkit-app-region: drag">
-        <button id="settings-toggle" class="flex items-center gap-1.5 text-neutral-400 hover:text-neutral-200 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-[11px] px-2 py-1 rounded-md transition-colors" style="-webkit-app-region: no-drag" title="Settings">⚙ Settings</button>
+      <!-- Drag region + tabs + settings toggle -->
+      <div class="shrink-0 flex items-center justify-end px-4 pt-8 pb-1 gap-2" style="-webkit-app-region: drag">
+        <div class="flex gap-1 bg-neutral-800 rounded-md p-0.5 border border-neutral-700" style="-webkit-app-region: no-drag">
+          <button data-tab="backup" class="tab-btn px-2.5 py-1 text-[11px] rounded transition-colors bg-neutral-700 text-neutral-200">SD Backup</button>
+          <button data-tab="sync" class="tab-btn px-2.5 py-1 text-[11px] rounded transition-colors text-neutral-500 hover:text-neutral-300">Folder Sync</button>
+        </div>
+        <button id="settings-toggle" class="flex items-center gap-1.5 text-neutral-400 hover:text-neutral-200 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-[11px] px-2.5 py-1 rounded-md transition-colors self-stretch" style="-webkit-app-region: no-drag" title="Settings">⚙ Settings</button>
       </div>
 
       <!-- Settings panel -->
@@ -212,6 +216,64 @@
             </div>
             <span id="progress-label" class="text-neutral-400 text-xs w-16 text-right"></span>
           </div>
+        </div>
+      </div>
+
+      <!-- Folder Sync view -->
+      <div id="sync-content" class="hidden px-4 pb-4 flex flex-col gap-3 flex-1 overflow-hidden">
+        <!-- Source folder (drag & drop + browse) -->
+        <div class="space-y-1">
+          <div class="text-[10px] uppercase tracking-wider text-neutral-500">Source</div>
+          <div id="sync-source-drop" class="flex items-center gap-2 border-2 border-dashed border-neutral-700 rounded-md px-2 py-1.5 transition-colors">
+            <span id="sync-source-label" class="flex-1 text-xs text-neutral-400 truncate">Drop folder or browse</span>
+            <button id="sync-browse-source" class="px-2 py-1 bg-neutral-700 hover:bg-neutral-600 rounded text-xs transition-colors shrink-0">Browse</button>
+          </div>
+        </div>
+
+        <!-- Dest folder (from transfer destinations) -->
+        <div class="space-y-1">
+          <div class="text-[10px] uppercase tracking-wider text-neutral-500">Destination</div>
+          <div class="flex items-center gap-2">
+            <select id="sync-dest-select" class="flex-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500"></select>
+            <button id="sync-browse-dest" class="px-2 py-1.5 bg-neutral-700 hover:bg-neutral-600 rounded text-xs transition-colors shrink-0">+</button>
+          </div>
+          <div id="sync-dest-hint" class="text-[10px] text-neutral-500"></div>
+        </div>
+
+        <!-- Scan button + status -->
+        <div class="flex items-center gap-2">
+          <button id="sync-scan-btn" disabled class="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-neutral-700 disabled:text-neutral-500 rounded-md text-xs font-medium transition-colors">
+            Compare folders
+          </button>
+          <span id="sync-status" class="text-neutral-400 text-xs truncate"></span>
+        </div>
+
+        <!-- All synced message -->
+        <div id="sync-all-synced" class="hidden flex-1 flex flex-col items-center justify-center text-center gap-3 opacity-70">
+          <span class="text-3xl">&#10003;</span>
+          <span class="text-sm text-neutral-300">Folders are in sync</span>
+        </div>
+
+        <!-- Diff results -->
+        <div id="sync-results" class="flex-1 overflow-auto hidden space-y-1">
+          <div id="sync-diff-list"></div>
+        </div>
+
+        <!-- Sync transfer -->
+        <div id="sync-transfer-section" class="hidden border border-neutral-700 rounded-md p-3 space-y-2">
+          <div class="flex items-center gap-3">
+            <button id="sync-transfer-btn" class="px-3 py-1.5 bg-green-600 hover:bg-green-500 rounded-md text-xs font-medium transition-colors">
+              Sync
+            </button>
+            <button id="sync-cancel-btn" class="hidden px-3 py-1.5 bg-red-600/80 hover:bg-red-500 rounded-md text-xs font-medium transition-colors">
+              Cancel
+            </button>
+            <div class="flex-1 bg-neutral-800 rounded-full h-2 overflow-hidden">
+              <div id="sync-progress-bar" class="bg-green-500 h-full transition-all duration-200" style="width: 0%"></div>
+            </div>
+            <span id="sync-progress-label" class="text-neutral-400 text-xs w-16 text-right"></span>
+          </div>
+          <div id="sync-transfer-hint" class="text-[10px] text-neutral-500"></div>
         </div>
       </div>
     </div>
