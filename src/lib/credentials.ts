@@ -30,8 +30,10 @@ export async function loadSynologyConfig(): Promise<SynologyConfig | null> {
 
   if (!host || !user || !password) return null;
 
-  const foldersStr = getSetting('synologyFolders') ?? '';
-  const folders = foldersStr.split(/\s+/).filter(Boolean);
+  const rawFolders = getSetting('synologyFolders');
+  const folders = Array.isArray(rawFolders)
+    ? rawFolders
+    : (typeof rawFolders === 'string' ? rawFolders.split(/\s+/).filter(Boolean) : []);
   if (!folders.length) return null;
 
   return {

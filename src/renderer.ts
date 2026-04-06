@@ -734,7 +734,6 @@ const cfgHost = $<HTMLInputElement>('#cfg-host');
 const cfgPort = $<HTMLInputElement>('#cfg-port');
 const cfgUser = $<HTMLInputElement>('#cfg-user');
 const cfgPass = $<HTMLInputElement>('#cfg-pass');
-const cfgFolders = $<HTMLInputElement>('#cfg-folders');
 const cfgSecure = $<HTMLInputElement>('#cfg-secure');
 const cfgSave = document.getElementById('cfg-save')!;
 
@@ -750,12 +749,15 @@ document.querySelectorAll<HTMLButtonElement>('.settings-card-header').forEach((b
   });
 });
 
-function updateCardSummaries(host: string, folders: string, geminiKey?: string) {
+function updateCardSummaries(host: string, _folders?: unknown, geminiKey?: string) {
   const synoOk = !!(host);
   document.getElementById('card-synology-dot')!.className =
     `w-2 h-2 rounded-full shrink-0 ${synoOk ? 'bg-green-500' : 'bg-neutral-600'}`;
+  const folderSummary = currentSynoFolders.length
+    ? `${currentSynoFolders.length} folder${currentSynoFolders.length > 1 ? 's' : ''}`
+    : 'no folders';
   document.getElementById('card-synology-summary')!.textContent =
-    synoOk ? `${host} (${folders || 'no folders'})` : 'Not configured';
+    synoOk ? `${host} (${folderSummary})` : 'Not configured';
 
   const pathCount = currentCheckPaths.length;
   document.getElementById('card-paths-dot')!.className =
@@ -800,7 +802,15 @@ settingsToggle.addEventListener('click', async () => {
     cfgPort.value = String(port ?? 5001);
     cfgUser.value = user ?? '';
     cfgPass.value = pass ?? '';
-    cfgFolders.value = folders ?? '';
+    // Support legacy space-separated string or new array format
+    if (Array.isArray(folders)) {
+      currentSynoFolders = folders;
+    } else if (typeof folders === 'string' && folders) {
+      currentSynoFolders = folders.split(/\s+/).filter(Boolean);
+    } else {
+      currentSynoFolders = [];
+    }
+    renderSynoFolderChips(document.getElementById('cfg-folders-list')!);
     cfgSecure.checked = secure ?? true;
     $<HTMLInputElement>('#cfg-gemini-key').value = geminiKey ?? '';
 
@@ -813,7 +823,7 @@ settingsToggle.addEventListener('click', async () => {
     // Collapse all detail sections
     document.querySelectorAll('[id^="card-"][id$="-detail"]').forEach((d) => d.classList.add('hidden'));
 
-    updateCardSummaries(host ?? '', folders ?? '', geminiKey ?? '');
+    updateCardSummaries(host ?? '', undefined, geminiKey ?? '');
 
     mainContent.classList.add('hidden');
     syncContent.classList.add('hidden');
@@ -823,6 +833,23 @@ settingsToggle.addEventListener('click', async () => {
 
 let currentCheckPaths: { path: string; fallbackOnly?: boolean }[] = [];
 let currentTransferDests: string[] = [];
+let currentSynoFolders: string[] = [];
+
+function renderSynoFolderChips(container: HTMLElement) {
+  container.innerHTML = currentSynoFolders.map((f, i) => `
+    <div class="flex items-center gap-1.5">
+      <span class="flex-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-neutral-300 truncate">${escapeHtml(f)}</span>
+      <button data-remove-folder="${i}" class="text-neutral-600 hover:text-red-400 text-sm leading-none transition-colors px-1">×</button>
+    </div>
+  `).join('');
+
+  container.querySelectorAll<HTMLButtonElement>('[data-remove-folder]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      currentSynoFolders.splice(parseInt(btn.dataset.removeFolder!), 1);
+      renderSynoFolderChips(container);
+    });
+  });
+}
 
 function renderPathChips(container: HTMLElement) {
   container.innerHTML = currentCheckPaths.map((cp, i) => `
@@ -866,6 +893,23 @@ function renderDestChips(container: HTMLElement) {
   });
 }
 
+document.getElementById('cfg-add-folder')!.addEventListener('click', () => {
+  const input = $<HTMLInputElement>('#cfg-folder-input');
+  const val = input.value.trim();
+  if (val && !currentSynoFolders.includes(val)) {
+    currentSynoFolders.push(val);
+    renderSynoFolderChips(document.getElementById('cfg-folders-list')!);
+    input.value = '';
+  }
+});
+
+$<HTMLInputElement>('#cfg-folder-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    document.getElementById('cfg-add-folder')!.click();
+  }
+});
+
 document.getElementById('cfg-test-synology')!.addEventListener('click', async () => {
   const btn = $<HTMLButtonElement>('#cfg-test-synology');
   const resultEl = document.getElementById('cfg-test-result')!;
@@ -873,7 +917,7 @@ document.getElementById('cfg-test-synology')!.addEventListener('click', async ()
   resultEl.textContent = 'Testing...';
   resultEl.className = 'text-[10px] text-neutral-400';
   const result = await window.api.testSynology(
-    cfgHost.value, parseInt(cfgPort.value) || 5001, cfgUser.value, cfgPass.value, cfgSecure.checked, cfgFolders.value,
+    cfgHost.value, parseInt(cfgPort.value) || 5001, cfgUser.value, cfgPass.value, cfgSecure.checked, currentSynoFolders.join(' '),
   );
   btn.disabled = false;
   if (result.ok) {
@@ -907,7 +951,7 @@ cfgSave.addEventListener('click', async () => {
     window.api.setSetting('synologyPort', cfgPort.value ? parseInt(cfgPort.value) : undefined),
     window.api.setSetting('synologyUser', cfgUser.value || undefined),
     window.api.setSetting('synologyPass', cfgPass.value || undefined),
-    window.api.setSetting('synologyFolders', cfgFolders.value || undefined),
+    window.api.setSetting('synologyFolders', currentSynoFolders.length ? currentSynoFolders : undefined),
     window.api.setSetting('synologySecure', cfgSecure.checked),
     window.api.setSetting('checkPaths', currentCheckPaths.length ? currentCheckPaths as any : undefined),
     window.api.setSetting('transferDests', currentTransferDests.length ? currentTransferDests : undefined),

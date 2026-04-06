@@ -40,8 +40,14 @@
                 <input id="cfg-user" type="text" class="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500" />
                 <label class="text-neutral-500">Password</label>
                 <input id="cfg-pass" type="password" placeholder="or op://vault/item/field" class="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500" />
-                <label class="text-neutral-500">Folders</label>
-                <input id="cfg-folders" type="text" placeholder="/photos /archive (space-separated)" class="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500" />
+                <label class="text-neutral-500 self-start pt-1">Folders</label>
+                <div>
+                  <div id="cfg-folders-list" class="space-y-1"></div>
+                  <div class="flex items-center gap-1.5 mt-1">
+                    <input id="cfg-folder-input" type="text" placeholder="/photo/Photos" class="flex-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500" />
+                    <button id="cfg-add-folder" class="text-blue-400 hover:text-blue-300 text-sm leading-none transition-colors px-1">+</button>
+                  </div>
+                </div>
                 <label class="text-neutral-500">HTTPS</label>
                 <label class="flex items-center gap-1 cursor-pointer">
                   <input id="cfg-secure" type="checkbox" checked class="accent-blue-500 scale-90" />
@@ -134,15 +140,17 @@
         </div>
 
         <!-- Actions -->
-        <div id="actions-row" class="flex items-center gap-2 hidden">
-          <button id="scan-btn" disabled class="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-neutral-700 disabled:text-neutral-500 rounded-md text-xs font-medium transition-colors">
-            Scan for duplicates
-          </button>
-          <span class="text-neutral-500 text-xs">or</span>
-          <button id="instant-transfer-btn" disabled class="px-3 py-1.5 bg-neutral-700 hover:bg-neutral-600 disabled:bg-neutral-800 disabled:text-neutral-600 border border-neutral-600 rounded-md text-xs font-medium transition-colors text-neutral-300">
-            Fast mode <span class="text-neutral-500 font-normal">(metadata only, no duplicates)</span>
-          </button>
-          <span id="status" class="text-neutral-400 text-xs truncate"></span>
+        <div id="actions-row" class="hidden space-y-1.5">
+          <div class="flex items-center gap-2 min-w-0">
+            <button id="scan-btn" disabled class="shrink-0 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-neutral-700 disabled:text-neutral-500 rounded-md text-xs font-medium transition-colors">
+              Scan for duplicates
+            </button>
+            <span class="shrink-0 text-neutral-500 text-xs">or</span>
+            <button id="instant-transfer-btn" disabled class="min-w-0 px-3 py-1.5 bg-neutral-700 hover:bg-neutral-600 disabled:bg-neutral-800 disabled:text-neutral-600 border border-neutral-600 rounded-md text-xs font-medium transition-colors text-neutral-300 truncate">
+              Fast mode <span class="text-neutral-500 font-normal">(metadata only, no duplicates)</span>
+            </button>
+          </div>
+          <span id="status" class="block text-neutral-400 text-xs truncate"></span>
         </div>
 
         <!-- All backed up message -->
