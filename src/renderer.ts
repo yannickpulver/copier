@@ -352,8 +352,8 @@ function resetResults() {
   status.textContent = '';
 }
 
-async function runScan(skipCheck: boolean) {
-  const sdPath = sdSelect.value;
+async function runScan(skipCheck: boolean, sdPathOverride?: string) {
+  const sdPath = sdPathOverride || sdSelect.value;
   if (!sdPath) return;
 
   scanBtn.disabled = true;
@@ -648,8 +648,9 @@ transferBtn.addEventListener('click', async () => {
       progressBar.style.width = '100%';
       progressLabel.textContent = result.errors.length ? `Done — ${result.errors.length} errors` : 'Done!';
       status.textContent = 'Transfer complete — rescanning...';
+      const rescanPath = sdSelect.value;
       await new Promise((r) => setTimeout(r, 800));
-      scanBtn.click();
+      runScan(false, rescanPath);
     }
   } catch (e: any) {
     progressLabel.textContent = `Error: ${e.message}`;
