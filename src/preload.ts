@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 contextBridge.exposeInMainWorld('api', {
   listSdCards: () => ipcRenderer.invoke('list-sd-cards'),
@@ -58,4 +58,5 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('sync-transfer-progress', listener);
     return () => ipcRenderer.removeListener('sync-transfer-progress', listener);
   },
+  getPathForFile: (file: File) => webUtils.getPathForFile(file),
 });

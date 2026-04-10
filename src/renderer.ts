@@ -39,6 +39,7 @@ declare global {
       cancelSync: () => Promise<void>;
       onSyncProgress: (cb: (data: { step: string; count: number; folder: string }) => void) => () => void;
       onSyncTransferProgress: (cb: (data: { current: number; total: number; name: string }) => void) => () => void;
+      getPathForFile: (file: File) => string;
     };
   }
 }
@@ -1073,7 +1074,7 @@ syncSourceDrop.addEventListener('drop', (e) => {
   e.preventDefault();
   syncSourceDrop.classList.replace('border-blue-500', 'border-neutral-700');
   const file = e.dataTransfer?.files[0];
-  if (file) setSyncSource(file.path);
+  if (file) setSyncSource(window.api.getPathForFile(file));
 });
 
 document.getElementById('sync-browse-source')!.addEventListener('click', async () => {
