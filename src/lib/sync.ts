@@ -7,6 +7,7 @@ export interface SyncFileInfo {
   name: string;
   size: number;
   mtime: number; // ms since epoch
+  destRelPath?: string; // set when dest file lives at a different path
 }
 
 export interface SyncDiff {
@@ -55,14 +56,17 @@ export async function walkFolder(
   return results;
 }
 
-/** Compare source files against dest files. */
+/** Compare source files against dest files, matching by filename across any subfolder depth. */
 export function diffFolders(
   sourceFiles: SyncFileInfo[],
   destFiles: SyncFileInfo[],
 ): SyncDiff {
-  const destMap = new Map<string, SyncFileInfo>();
+  // Index dest files by filename (multiple files can share a name)
+  const destByName = new Map<string, SyncFileInfo[]>();
   for (const f of destFiles) {
-    destMap.set(f.relPath, f);
+    const list = destByName.get(f.name);
+    if (list) list.push(f);
+    else destByName.set(f.name, [f]);
   }
 
   const added: SyncFileInfo[] = [];
@@ -70,12 +74,21 @@ export function diffFolders(
   let unchanged = 0;
 
   for (const src of sourceFiles) {
-    const dest = destMap.get(src.relPath);
-    if (!dest) {
+    const candidates = destByName.get(src.name);
+    if (!candidates || candidates.length === 0) {
       added.push(src);
-    } else if (src.size !== dest.size || src.mtime > dest.mtime + 1000) {
-      // 1s tolerance for mtime (filesystem rounding)
-      changed.push(src);
+      continue;
+    }
+
+    // Prefer exact relPath match, then any match by name+size
+    const exactPath = candidates.find((d) => d.relPath === src.relPath);
+    const sameSize = candidates.find((d) => d.size === src.size);
+    const dest = exactPath ?? sameSize ?? candidates[0];
+
+    if (src.size !== dest.size || src.mtime > dest.mtime + 1000) {
+      changed.push(dest.relPath !== src.relPath
+        ? { ...src, destRelPath: dest.relPath }
+        : src);
     } else {
       unchanged++;
     }
@@ -96,7 +109,7 @@ export async function syncFiles(
   for (let i = 0; i < files.length; i++) {
     if (signal?.aborted) break;
     const f = files[i];
-    const destPath = path.join(destRoot, f.relPath);
+    const destPath = path.join(destRoot, f.destRelPath ?? f.relPath);
     try {
       await fs.promises.mkdir(path.dirname(destPath), { recursive: true });
       await fs.promises.copyFile(f.fullPath, destPath);

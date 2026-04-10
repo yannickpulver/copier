@@ -1,7 +1,7 @@
 {
   "name": "copier",
   "productName": "copier",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "description": "Check if SD card files are backed up to NAS or local drives",
   "main": ".vite/build/main.js",
   "private": true,

@@ -71,6 +71,7 @@ const otherList = $<HTMLTableSectionElement>('#other-list');
 
 let sdCards: { name: string; path: string }[] = [];
 let missingFiles: any[] = [];
+let scanGeneration = 0;
 
 const MIN_SESSION_GAP_MS = 15 * 60 * 1000; // 15 min minimum to consider a break
 
@@ -341,6 +342,7 @@ window.api.onScanProgress(({ step, count, folder }) => {
 });
 
 function resetResults() {
+  scanGeneration++;
   missingFiles = [];
   fileList.innerHTML = '';
   otherList.innerHTML = '';
@@ -351,11 +353,16 @@ function resetResults() {
   progressBar.style.width = '0%';
   progressLabel.textContent = '';
   status.textContent = '';
+  scanBtn.disabled = sdCards.length === 0;
+  instantTransferBtn.disabled = sdCards.length === 0;
 }
 
 async function runScan(skipCheck: boolean, sdPathOverride?: string) {
   const sdPath = sdPathOverride || sdSelect.value;
   if (!sdPath) return;
+
+  scanGeneration++;
+  const gen = scanGeneration;
 
   scanBtn.disabled = true;
   instantTransferBtn.disabled = true;
@@ -369,6 +376,7 @@ async function runScan(skipCheck: boolean, sdPathOverride?: string) {
 
   try {
     const result = await window.api.scan(sdPath, skipCheck);
+    if (gen !== scanGeneration) return;
 
     const media = result.missing.filter((f) => f.isMedia !== false);
     const other = result.missing.filter((f) => f.isMedia === false);
