@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('api', {
     return () => ipcRenderer.removeListener('source-status', listener);
   },
   scan: (sdPath: string, skipCheck?: boolean) => ipcRenderer.invoke('scan', sdPath, skipCheck),
+  cancelScan: () => ipcRenderer.invoke('cancel-scan'),
   listExistingFolders: (nasPath: string) =>
     ipcRenderer.invoke('list-existing-folders', nasPath),
   transfer: (files: any[], dest: string, mode: string, topic?: string, cameraSubfolder?: boolean, fileGroups?: {dest: string, files: any[]}[]) =>

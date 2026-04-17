@@ -66,9 +66,10 @@ function checkVolume(ident: string, name: string, mount: string): Promise<SdCard
 export async function scanFiles(
   volumePath: string,
   onProgress?: (count: number, folder: string) => void,
+  signal?: AbortSignal,
 ): Promise<FileInfo[]> {
   const files: FileInfo[] = [];
-  await walkDir(volumePath, volumePath, files, onProgress);
+  await walkDir(volumePath, volumePath, files, onProgress, signal);
   return files;
 }
 
@@ -77,7 +78,9 @@ async function walkDir(
   dir: string,
   files: FileInfo[],
   onProgress?: (count: number, folder: string) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
+  if (signal?.aborted) throw new Error('aborted');
   let entries: fs.Dirent[];
   try {
     entries = await fs.promises.readdir(dir, { withFileTypes: true });
@@ -117,6 +120,7 @@ async function walkDir(
   }
 
   for (const sub of subdirs) {
-    await walkDir(root, sub, files, onProgress);
+    if (signal?.aborted) throw new Error('aborted');
+    await walkDir(root, sub, files, onProgress, signal);
   }
 }

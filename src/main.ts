@@ -119,12 +119,23 @@ ipcMain.handle('check-sources-status', async () => {
   }));
 });
 
+let scanAbort: AbortController | null = null;
+
+ipcMain.handle('cancel-scan', () => {
+  scanAbort?.abort();
+});
+
 ipcMain.handle('scan', async (_event, sdPath: string, skipCheck?: boolean) => {
+  scanAbort?.abort();
+  scanAbort = new AbortController();
+  const signal = scanAbort.signal;
+
   // 1. Scan SD
   sendProgress('sd', 0, 'Starting...');
   const sdFiles = await scanFiles(sdPath, (count, folder) => {
     sendProgress('sd', count, folder);
-  });
+  }, signal);
+  if (signal.aborted) throw new Error('aborted');
   sendProgress('sd', sdFiles.length, 'Done');
 
   // Skip backup check — treat all media as new
@@ -134,8 +145,9 @@ ipcMain.handle('scan', async (_event, sdPath: string, skipCheck?: boolean) => {
       sendProgress('dates', 0, 'Reading metadata...');
       await enrichMetadata(media, (current, total) => {
         sendProgress('dates', current, `${current}/${total}`);
-      });
+      }, signal);
     }
+    if (signal.aborted) throw new Error('aborted');
     return {
       total: sdFiles.length,
       backedUp: 0,
@@ -218,8 +230,9 @@ ipcMain.handle('scan', async (_event, sdPath: string, skipCheck?: boolean) => {
     sendProgress('dates', 0, 'Reading metadata...');
     await enrichMetadata(missing, (current, total) => {
       sendProgress('dates', current, `${current}/${total}`);
-    });
+    }, signal);
   }
+  if (signal.aborted) throw new Error('aborted');
 
   return {
     total: sdFiles.length,

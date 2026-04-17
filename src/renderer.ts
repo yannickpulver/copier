@@ -8,6 +8,7 @@ declare global {
       checkSourcesStatus: () => Promise<void>;
       onSourcesList: (cb: (sources: { name: string; type: string }[]) => void) => () => void;
       onSourceStatus: (cb: (data: { index: number; available: boolean }) => void) => () => void;
+      cancelScan: () => Promise<void>;
       scan: (sdPath: string, skipCheck?: boolean) => Promise<{
         total: number;
         backedUp: number;
@@ -72,6 +73,8 @@ const otherList = $<HTMLTableSectionElement>('#other-list');
 let sdCards: { name: string; path: string }[] = [];
 let missingFiles: any[] = [];
 let scanGeneration = 0;
+const mergedDays = new Set<string>();
+let lastExistingFolders: string[] = [];
 
 const MIN_SESSION_GAP_MS = 15 * 60 * 1000; // 15 min minimum to consider a break
 
@@ -139,6 +142,42 @@ function detectSessions(files: any[]): Map<string, any[]> {
   }
 
   return sessions;
+}
+
+/** Collapse same-day split sessions back into single day entry when day is in mergedDays. */
+function mergeSameDaySessions(sessions: Map<string, any[]>): Map<string, any[]> {
+  if (mergedDays.size === 0) return sessions;
+  const result = new Map<string, any[]>();
+  for (const [key, files] of sessions) {
+    const day = key.split('#')[0];
+    if (mergedDays.has(day)) {
+      const arr = result.get(day);
+      if (arr) arr.push(...files);
+      else result.set(day, [...files]);
+    } else {
+      result.set(key, files);
+    }
+  }
+  for (const day of mergedDays) {
+    const arr = result.get(day);
+    if (arr) arr.sort((a, b) => new Date(a.captureDate).getTime() - new Date(b.captureDate).getTime());
+  }
+  return result;
+}
+
+function sessionsFor(files: any[]): Map<string, any[]> {
+  return mergeSameDaySessions(detectSessions(files));
+}
+
+/** True if the day has >1 raw sessions (eligible for merge toggle). */
+function dayHasSplits(files: any[], day: string): boolean {
+  const raw = detectSessions(files);
+  let count = 0;
+  for (const k of raw.keys()) {
+    if (k.split('#')[0] === day) count++;
+    if (count > 1) return true;
+  }
+  return false;
 }
 
 function sessionLabel(key: string): string {
@@ -253,7 +292,8 @@ async function refreshSdCards() {
     if (cards.find((c) => c.path === prev)) {
       sdSelect.value = prev;
     } else {
-      // SD card changed — reset results
+      // SD card changed — cancel in-flight scan and reset
+      window.api.cancelScan();
       resetResults();
     }
     scanBtn.disabled = cards.length === 0;
@@ -304,7 +344,8 @@ function groupFilesByDate(files: any[]): Map<string, any[]> {
 }
 
 function renderSessionFolderMappings(files: any[], existingFolders: string[]) {
-  const sessions = detectSessions(files);
+  lastExistingFolders = existingFolders;
+  const sessions = sessionsFor(files);
   const reversedFolders = [...existingFolders].reverse();
   const folderOptions = [
     '<option value="">— skip —</option>',
@@ -344,6 +385,8 @@ window.api.onScanProgress(({ step, count, folder }) => {
 function resetResults() {
   scanGeneration++;
   missingFiles = [];
+  mergedDays.clear();
+  lastExistingFolders = [];
   fileList.innerHTML = '';
   otherList.innerHTML = '';
   allBackedUp.classList.add('hidden');
@@ -374,11 +417,25 @@ async function runScan(skipCheck: boolean, sdPathOverride?: string) {
   otherSection.classList.add('hidden');
   transferSection.classList.add('hidden');
 
+  mergedDays.clear();
+
   try {
     const result = await window.api.scan(sdPath, skipCheck);
     if (gen !== scanGeneration) return;
 
     const media = result.missing.filter((f) => f.isMedia !== false);
+
+    // Default: merge all same-day splits (user can split individually)
+    const rawSessions = detectSessions(media);
+    const daysWithSplits = new Map<string, number>();
+    for (const key of rawSessions.keys()) {
+      if (key === 'unknown') continue;
+      const day = key.split('#')[0];
+      daysWithSplits.set(day, (daysWithSplits.get(day) ?? 0) + 1);
+    }
+    for (const [day, count] of daysWithSplits) {
+      if (count > 1) mergedDays.add(day);
+    }
     const other = result.missing.filter((f) => f.isMedia === false);
     missingFiles = media;
 
@@ -427,41 +484,8 @@ async function runScan(skipCheck: boolean, sdPathOverride?: string) {
       fileTable.classList.remove('hidden');
     }
 
-    // Group by session (time-gap aware)
-    const sessionGroups = detectSessions(media);
-    const sortedSessions = [...sessionGroups.entries()].sort((a, b) => b[0].localeCompare(a[0]));
-
-    fileList.innerHTML = sortedSessions.map(([key, files]) => {
-      const label = sessionLabel(key);
-      const totalSize = files.reduce((s, f) => s + f.size, 0);
-      return `
-        <details class="border border-neutral-700 rounded-md overflow-hidden">
-          <summary class="flex items-center gap-3 px-3 py-2 bg-neutral-800/50 hover:bg-neutral-800 cursor-pointer text-xs">
-            <span class="font-medium text-neutral-300">${label}</span>
-            <span class="text-neutral-500">${files.length} file${files.length > 1 ? 's' : ''}</span>
-            <span class="text-neutral-500 ml-auto">${formatSize(totalSize)}</span>
-          </summary>
-          <table class="w-full text-xs">
-            <tbody class="divide-y divide-neutral-800">
-              ${files.map((f: any) => `
-                <tr class="hover:bg-neutral-800/50 cursor-pointer" data-path="${escapeHtml(f.fullPath)}">
-                  <td class="px-3 py-1.5">${escapeHtml(f.name)}</td>
-                  <td class="px-3 py-1.5 text-right text-neutral-400 w-20 whitespace-nowrap">${formatSize(f.size)}</td>
-                  <td class="px-3 py-1.5 text-center text-neutral-400 w-20 truncate">${f.camera ? escapeHtml(f.camera) : ''}</td>
-                  <td class="px-3 py-1.5 text-right text-neutral-500 w-12 text-[10px]">${f.captureDate ? formatTime(f.captureDate) : ''}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </details>
-      `;
-    }).join('');
-
-    // Click to reveal in Finder
-    fileList.addEventListener('click', (e) => {
-      const row = (e.target as HTMLElement).closest('tr');
-      if (row?.dataset.path) window.api.revealFile(row.dataset.path);
-    });
+    // Group by session (time-gap aware, respects mergedDays)
+    renderFileListSessions(media);
 
     if (other.length > 0) {
       otherSection.classList.remove('hidden');
@@ -484,25 +508,7 @@ async function runScan(skipCheck: boolean, sdPathOverride?: string) {
       transferBtn.textContent = `Transfer ${media.length} files`;
 
       // Build session groups preview
-      const sessionCounts = [...sessionGroups.entries()]
-        .filter(([k]) => k !== 'unknown')
-        .sort((a, b) => b[0].localeCompare(a[0]));
-      dateGroupsPreview.innerHTML = sessionCounts.map(([key, files]) => {
-        const label = sessionLabel(key);
-        const hasMultipleSessions = key.includes('#') || sessionCounts.some(([k]) => k !== key && k.split('#')[0] === key.split('#')[0]);
-        return `<div class="flex items-center gap-1.5 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-[10px] text-neutral-300">
-          <input type="checkbox" checked data-session="${key}" class="date-filter-cb accent-blue-500 w-3 h-3" />
-          <span>${label}</span>
-          <span class="text-neutral-500">(${files.length})</span>
-          ${hasMultipleSessions ? `<input type="text" data-session-topic="${key}" placeholder="topic" class="session-topic bg-neutral-900 border border-neutral-700 rounded px-1.5 py-0.5 text-[10px] w-24 focus:outline-none focus:border-blue-500" />` : ''}
-        </div>`;
-      }).join('');
-
-      // Update transfer button count when session selection changes
-      dateGroupsPreview.addEventListener('change', () => {
-        const count = getFilteredFiles().length;
-        transferBtn.textContent = `Transfer ${count} files`;
-      });
+      renderSessionChips(media);
 
       // Show camera subfolder option if cameras detected
       const cameras = new Set(media.map((f: any) => f.camera).filter(Boolean));
@@ -555,6 +561,10 @@ async function runScan(skipCheck: boolean, sdPathOverride?: string) {
           const desc = await window.api.describeImage(sample.fullPath);
           if (desc.ok && desc.description) {
             topicInput.value = desc.description;
+            // Pre-fill per-session topic inputs with same suggestion
+            dateGroupsPreview.querySelectorAll<HTMLInputElement>('[data-session-topic]').forEach((el) => {
+              if (!el.value.trim()) el.value = desc.description!;
+            });
             // Also append to new folder name if it ends with " - "
             if (newFolderInput.value.endsWith(' - ')) {
               newFolderInput.value += desc.description;
@@ -565,7 +575,11 @@ async function runScan(skipCheck: boolean, sdPathOverride?: string) {
       }
     }
   } catch (e: any) {
-    status.textContent = `Error: ${e.message}`;
+    if (e.message?.includes('aborted')) {
+      status.textContent = '';
+    } else {
+      status.textContent = `Error: ${e.message}`;
+    }
   } finally {
     scanBtn.disabled = false;
     instantTransferBtn.disabled = false;
@@ -575,6 +589,11 @@ async function runScan(skipCheck: boolean, sdPathOverride?: string) {
 scanBtn.addEventListener('click', () => runScan(false));
 instantTransferBtn.addEventListener('click', () => runScan(true));
 
+sdSelect.addEventListener('change', () => {
+  window.api.cancelScan();
+  resetResults();
+});
+
 // Toggle date groups preview
 document.querySelectorAll<HTMLInputElement>('input[name="xfer-mode"]').forEach((radio) => {
   radio.addEventListener('change', () => {
@@ -582,6 +601,32 @@ document.querySelectorAll<HTMLInputElement>('input[name="xfer-mode"]').forEach((
     dateGroupsPreview.classList.toggle('hidden', selected?.value !== 'grouped');
     existingSelect.classList.toggle('hidden', selected?.value !== 'existing');
   });
+});
+
+// Delegated handlers: click-to-reveal on fileList rows; merge/unmerge buttons
+fileList.addEventListener('click', (e) => {
+  const target = e.target as HTMLElement;
+  const mergeBtn = target.closest<HTMLButtonElement>('[data-merge-toggle]');
+  if (mergeBtn) {
+    e.preventDefault();
+    e.stopPropagation();
+    toggleMergeDay(mergeBtn.dataset.mergeToggle!);
+    return;
+  }
+  const row = target.closest('tr');
+  if (row?.dataset.path) window.api.revealFile(row.dataset.path);
+});
+
+dateGroupsPreview.addEventListener('click', (e) => {
+  const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-merge-toggle]');
+  if (!btn) return;
+  e.preventDefault();
+  toggleMergeDay(btn.dataset.mergeToggle!);
+});
+
+dateGroupsPreview.addEventListener('change', () => {
+  const count = getFilteredFiles().length;
+  transferBtn.textContent = `Transfer ${count} files`;
 });
 
 // --- Transfer ---
@@ -615,7 +660,7 @@ transferBtn.addEventListener('click', async () => {
       }))
       .filter((m) => m.folder);
     if (mappings.length === 0) return;
-    const sessions = detectSessions(filesToTransfer);
+    const sessions = sessionsFor(filesToTransfer);
     dest = basePath;
     fileGroups = mappings
       .map((m) => ({ dest: `${basePath}/${m.folder}`, files: sessions.get(m.session) ?? [] }))
@@ -625,7 +670,7 @@ transferBtn.addEventListener('click', async () => {
     // grouped mode — build session-aware file groups
     dest = basePath;
     const selected = getSelectedSessions();
-    const sessions = detectSessions(filesToTransfer);
+    const sessions = sessionsFor(filesToTransfer);
     const globalTopic = topicInput.value.trim();
     fileGroups = [];
     for (const [key, sFiles] of sessions) {
@@ -694,6 +739,109 @@ function suggestTransferMode(
   return { mode: 'grouped' };
 }
 
+// --- Session rendering ---
+
+function renderFileListSessions(media: any[]) {
+  const sessionGroups = sessionsFor(media);
+  const sortedSessions = [...sessionGroups.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+
+  fileList.innerHTML = sortedSessions.map(([key, files]) => {
+    const label = sessionLabel(key);
+    const totalSize = files.reduce((s: number, f: any) => s + f.size, 0);
+    const day = key.split('#')[0];
+    const isMerged = !key.includes('#') && mergedDays.has(day);
+    const hasSplits = key.includes('#') || isMerged;
+    const mergeBtn = hasSplits
+      ? `<button data-merge-toggle="${escapeHtml(day)}" class="text-[10px] text-blue-400 hover:text-blue-300 ml-2">${isMerged ? 'split' : 'merge day'}</button>`
+      : '';
+    return `
+      <details class="border border-neutral-700 rounded-md overflow-hidden">
+        <summary class="flex items-center gap-3 px-3 py-2 bg-neutral-800/50 hover:bg-neutral-800 cursor-pointer text-xs">
+          <span class="font-medium text-neutral-300">${label}</span>
+          <span class="text-neutral-500">${files.length} file${files.length > 1 ? 's' : ''}</span>
+          ${mergeBtn}
+          <span class="text-neutral-500 ml-auto">${formatSize(totalSize)}</span>
+        </summary>
+        <table class="w-full text-xs">
+          <tbody class="divide-y divide-neutral-800">
+            ${files.map((f: any) => `
+              <tr class="hover:bg-neutral-800/50 cursor-pointer" data-path="${escapeHtml(f.fullPath)}">
+                <td class="px-3 py-1.5">${escapeHtml(f.name)}</td>
+                <td class="px-3 py-1.5 text-right text-neutral-400 w-20 whitespace-nowrap">${formatSize(f.size)}</td>
+                <td class="px-3 py-1.5 text-center text-neutral-400 w-20 truncate">${f.camera ? escapeHtml(f.camera) : ''}</td>
+                <td class="px-3 py-1.5 text-right text-neutral-500 w-12 text-[10px]">${f.captureDate ? formatTime(f.captureDate) : ''}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </details>
+    `;
+  }).join('');
+}
+
+function renderSessionChips(media: any[]) {
+  const sessionGroups = sessionsFor(media);
+  const sessionCounts = [...sessionGroups.entries()]
+    .filter(([k]) => k !== 'unknown')
+    .sort((a, b) => b[0].localeCompare(a[0]));
+  dateGroupsPreview.innerHTML = sessionCounts.map(([key, files]) => {
+    const label = sessionLabel(key);
+    const day = key.split('#')[0];
+    const isMerged = !key.includes('#') && mergedDays.has(day);
+    const siblingSplit = sessionCounts.some(([k]) => k !== key && k.split('#')[0] === day);
+    const hasMultipleSessions = key.includes('#') || siblingSplit;
+    const canMerge = hasMultipleSessions || isMerged;
+    const canUnmerge = isMerged;
+    const canMergeNow = hasMultipleSessions && !isMerged && dayHasSplits(media, day);
+    const mergeBtn = canUnmerge
+      ? `<button data-merge-toggle="${escapeHtml(day)}" title="Split back into sessions" class="text-[10px] text-blue-400 hover:text-blue-300">split</button>`
+      : canMergeNow
+        ? `<button data-merge-toggle="${escapeHtml(day)}" title="Merge same-day splits" class="text-[10px] text-blue-400 hover:text-blue-300">merge</button>`
+        : '';
+    return `<div class="flex items-center gap-1.5 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-[10px] text-neutral-300">
+      <input type="checkbox" checked data-session="${key}" class="date-filter-cb accent-blue-500 w-3 h-3" />
+      <span>${label}</span>
+      <span class="text-neutral-500">(${files.length})</span>
+      ${canMerge ? mergeBtn : ''}
+      <input type="text" data-session-topic="${key}" placeholder="title" class="session-topic bg-neutral-900 border border-neutral-700 rounded px-1.5 py-0.5 text-[10px] w-32 focus:outline-none focus:border-blue-500" />
+    </div>`;
+  }).join('');
+}
+
+function rerenderSessionViews(media: any[]) {
+  const topicSnap = new Map<string, string>();
+  dateGroupsPreview.querySelectorAll<HTMLInputElement>('[data-session-topic]').forEach((el) => {
+    const v = el.value;
+    if (v) topicSnap.set(el.dataset.sessionTopic!, v);
+  });
+
+  renderFileListSessions(media);
+  renderSessionChips(media);
+  if (lastExistingFolders.length > 0 || existingSelect.innerHTML) {
+    renderSessionFolderMappings(media, lastExistingFolders);
+  }
+
+  // Restore topic values, with day-level fallback across merge/split
+  dateGroupsPreview.querySelectorAll<HTMLInputElement>('[data-session-topic]').forEach((el) => {
+    const k = el.dataset.sessionTopic!;
+    const direct = topicSnap.get(k);
+    if (direct) { el.value = direct; return; }
+    const day = k.split('#')[0];
+    for (const [sk, sv] of topicSnap) {
+      if (sk.split('#')[0] === day) { el.value = sv; return; }
+    }
+  });
+
+  const count = getFilteredFiles().length;
+  transferBtn.textContent = `Transfer ${count} files`;
+}
+
+function toggleMergeDay(day: string) {
+  if (mergedDays.has(day)) mergedDays.delete(day);
+  else mergedDays.add(day);
+  rerenderSessionViews(missingFiles);
+}
+
 // --- Date filtering ---
 
 function getSelectedSessions(): Set<string> {
@@ -704,7 +852,7 @@ function getSelectedSessions(): Set<string> {
 function getFilteredFiles(): typeof missingFiles {
   const selected = getSelectedSessions();
   if (selected.size === 0) return [];
-  const sessions = detectSessions(missingFiles);
+  const sessions = sessionsFor(missingFiles);
   const result: any[] = [];
   for (const [key, files] of sessions) {
     if (selected.has(key)) result.push(...files);

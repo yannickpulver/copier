@@ -22,8 +22,10 @@ interface MetadataResult {
 export async function enrichMetadata(
   files: FileInfo[],
   onProgress?: (current: number, total: number) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   for (let i = 0; i < files.length; i++) {
+    if (signal?.aborted) throw new Error('aborted');
     if (!files[i].captureDate) {
       const meta = await extractMetadata(files[i].fullPath);
       files[i].captureDate = meta.captureDate;
