@@ -4,6 +4,14 @@ Desktop app to check if SD card files are backed up and transfer missing ones.
 
 ![Screenshot](screenshot.png)
 
+## Install
+
+```sh
+brew install --cask yannickpulver/tap/copier
+```
+
+Apple Silicon only.
+
 ## Features
 
 - Auto-detects SD cards (excludes SSDs)
