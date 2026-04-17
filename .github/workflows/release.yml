@@ -124,3 +124,11 @@ jobs:
           name: Copier ${{ needs.version.outputs.version }}
           files: artifacts/**/*
           generate_release_notes: true
+
+  update-homebrew:
+    needs: [version, release]
+    uses: ./.github/workflows/update-homebrew-tap.yml
+    with:
+      tag: v${{ needs.version.outputs.version }}
+    secrets:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

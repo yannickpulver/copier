@@ -8,6 +8,15 @@ on:
       tag:
         description: "Release tag (e.g. v1.2.4)"
         required: true
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v1.2.4)"
+        required: true
+        type: string
+    secrets:
+      HOMEBREW_TAP_TOKEN:
+        required: true
 
 jobs:
   update-cask:
