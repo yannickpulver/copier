@@ -1,0 +1,72 @@
+name: Update Homebrew Tap
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v1.2.4)"
+        required: true
+
+jobs:
+  update-cask:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve tag and version
+        id: ver
+        run: |
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Download asset and compute sha256
+        id: sha
+        run: |
+          V="${{ steps.ver.outputs.version }}"
+          URL="https://github.com/${{ github.repository }}/releases/download/${{ steps.ver.outputs.tag }}/copier-darwin-arm64-$V.zip"
+          curl -fsSL -o asset.zip "$URL"
+          SHA=$(sha256sum asset.zip | cut -d' ' -f1)
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout tap
+        uses: actions/checkout@v4
+        with:
+          repository: yannickpulver/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Write cask
+        run: |
+          cat > tap/Casks/copier.rb <<EOF
+          cask "copier" do
+            version "${{ steps.ver.outputs.version }}"
+            sha256 "${{ steps.sha.outputs.sha256 }}"
+
+            url "https://github.com/yannickpulver/copier/releases/download/v#{version}/copier-darwin-arm64-#{version}.zip"
+            name "copier"
+            desc "Electron copier app"
+            homepage "https://github.com/yannickpulver/copier"
+
+            depends_on arch: :arm64
+
+            app "copier.app"
+
+            zap trash: [
+              "~/Library/Application Support/copier",
+              "~/Library/Preferences/com.yannickpulver.copier.plist",
+              "~/Library/Logs/copier",
+            ]
+          end
+          EOF
+
+      - name: Commit and push
+        run: |
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/copier.rb
+          git diff --cached --quiet && exit 0
+          git commit -m "copier ${{ steps.ver.outputs.version }}"
+          git push
