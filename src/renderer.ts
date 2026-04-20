@@ -1,4 +1,6 @@
 import './index.css';
+import { OverlayScrollbars } from 'overlayscrollbars';
+import 'overlayscrollbars/overlayscrollbars.css';
 
 declare global {
   interface Window {
@@ -9,9 +11,10 @@ declare global {
       onSourcesList: (cb: (sources: { name: string; type: string }[]) => void) => () => void;
       onSourceStatus: (cb: (data: { index: number; available: boolean }) => void) => () => void;
       cancelScan: () => Promise<void>;
-      scan: (sdPath: string, skipCheck?: boolean) => Promise<{
+      scan: (sdPath: string, skipCheck?: boolean, disabledSources?: string[]) => Promise<{
         total: number;
         backedUp: number;
+        backedUpFiles?: { name: string; size: number; fullPath: string; captureDate?: string; isMedia?: boolean }[];
         missing: { name: string; size: number; fullPath: string; captureDate?: string; isMedia?: boolean }[];
         suggestedFolders: { folder: string; count: number; source: string }[];
         sources: { name: string; ok: boolean; error?: string }[];
@@ -199,15 +202,37 @@ function sessionDatePrefix(key: string): string {
 
 const spinner = '<span class="inline-block w-2.5 h-2.5 border border-neutral-500 border-t-transparent rounded-full animate-spin shrink-0"></span>';
 
+const disabledSources = new Set<string>();
+let currentSources: { name: string; type: string }[] = [];
+
+function applyPillDisabledStyle(pill: HTMLElement, disabled: boolean) {
+  if (disabled) {
+    pill.classList.add('opacity-40', 'line-through');
+  } else {
+    pill.classList.remove('opacity-40', 'line-through');
+  }
+}
+
 function renderSourcesPending(sources: { name: string; type: string }[]) {
+  currentSources = sources;
   if (sources.length === 0) {
     sourcesStatus.innerHTML = '<span class="text-xs text-neutral-500">No sources — open ⚙</span>';
     return;
   }
   sourcesStatus.innerHTML = sources.map((s, i) => {
     const label = s.type === 'fallback' ? `${escapeHtml(s.name)} (fallback)` : escapeHtml(s.name);
-    return `<span id="source-pill-${i}" class="flex items-center gap-1.5 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-neutral-500">${spinner} ${label}</span>`;
+    return `<span id="source-pill-${i}" data-source-name="${escapeHtml(s.name)}" class="flex items-center gap-1.5 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-neutral-500 cursor-pointer hover:border-neutral-500" title="Click to toggle for next scan">${spinner} ${label}</span>`;
   }).join('');
+  sources.forEach((s, i) => {
+    const pill = document.getElementById(`source-pill-${i}`);
+    if (!pill) return;
+    applyPillDisabledStyle(pill, disabledSources.has(s.name));
+    pill.addEventListener('click', () => {
+      if (disabledSources.has(s.name)) disabledSources.delete(s.name);
+      else disabledSources.add(s.name);
+      applyPillDisabledStyle(pill, disabledSources.has(s.name));
+    });
+  });
 }
 
 function resolveSourcePill(index: number, available: boolean) {
@@ -252,6 +277,10 @@ function populateTransferDests() {
 }
 
 async function init() {
+  // Overlay scrollbars on the main scrolling container only
+  const mc = document.querySelector<HTMLElement>('#main-content');
+  if (mc) OverlayScrollbars(mc, { scrollbars: { theme: 'os-theme-light', autoHide: 'leave', autoHideDelay: 500 } });
+
   // Fire all in parallel, each section resolves independently
   const destsPromise = Promise.all([
     window.api.getSetting('transferDests'),
@@ -392,6 +421,7 @@ function resetResults() {
   allBackedUp.classList.add('hidden');
   fileTable.classList.add('hidden');
   otherSection.classList.add('hidden');
+  document.getElementById('backedup-section')?.classList.add('hidden');
   transferSection.classList.add('hidden');
   progressBar.style.width = '0%';
   progressLabel.textContent = '';
@@ -415,12 +445,13 @@ async function runScan(skipCheck: boolean, sdPathOverride?: string) {
   allBackedUp.classList.add('hidden');
   fileTable.classList.add('hidden');
   otherSection.classList.add('hidden');
+  document.getElementById('backedup-section')?.classList.add('hidden');
   transferSection.classList.add('hidden');
 
   mergedDays.clear();
 
   try {
-    const result = await window.api.scan(sdPath, skipCheck);
+    const result = await window.api.scan(sdPath, skipCheck, [...disabledSources]);
     if (gen !== scanGeneration) return;
 
     const media = result.missing.filter((f) => f.isMedia !== false);
@@ -503,6 +534,25 @@ async function runScan(skipCheck: boolean, sdPathOverride?: string) {
       });
     }
 
+    const backedUpFiles = result.backedUpFiles ?? [];
+    if (backedUpFiles.length > 0) {
+      const backedupSection = document.getElementById('backedup-section')!;
+      const backedupLabel = document.getElementById('backedup-label')!;
+      const backedupList = document.getElementById('backedup-list') as HTMLTableSectionElement;
+      backedupSection.classList.remove('hidden');
+      backedupLabel.textContent = `Already backed up (${backedUpFiles.length} files)`;
+      backedupList.innerHTML = backedUpFiles.map((f) => `
+        <tr class="hover:bg-neutral-800/50 cursor-pointer" data-path="${escapeHtml(f.fullPath)}">
+          <td class="px-3 py-1.5">${escapeHtml(f.name)}</td>
+          <td class="px-3 py-1.5 text-right text-neutral-400">${formatSize(f.size)}</td>
+        </tr>
+      `).join('');
+      backedupList.addEventListener('click', (e) => {
+        const row = (e.target as HTMLElement).closest('tr');
+        if (row?.dataset.path) window.api.revealFile(row.dataset.path);
+      });
+    }
+
     if (media.length > 0) {
       transferSection.classList.remove('hidden');
       transferBtn.textContent = `Transfer ${media.length} files`;
@@ -510,11 +560,12 @@ async function runScan(skipCheck: boolean, sdPathOverride?: string) {
       // Build session groups preview
       renderSessionChips(media);
 
-      // Show camera subfolder option if cameras detected
+      // Show camera subfolder option if cameras detected and jpgs present
       const cameras = new Set(media.map((f: any) => f.camera).filter(Boolean));
+      const hasJpg = media.some((f: any) => /\.jpe?g$/i.test(f.name));
       const cameraSubfolderOption = document.getElementById('camera-subfolder-option')!;
       const cameraList = document.getElementById('camera-list')!;
-      if (cameras.size > 0) {
+      if (cameras.size > 0 && hasJpg) {
         cameraSubfolderOption.classList.remove('hidden');
         cameraList.textContent = `(${[...cameras].join(', ')})`;
       } else {
@@ -527,6 +578,11 @@ async function runScan(skipCheck: boolean, sdPathOverride?: string) {
         const folders = await window.api.listExistingFolders(destPath);
         renderSessionFolderMappings(media, folders);
       }
+
+      // Hide "Group by date" option if only one date
+      const sessionsCount = [...sessionsFor(media).keys()].filter((k) => k !== 'unknown').length;
+      const groupedOption = document.getElementById('grouped-option');
+      if (groupedOption) groupedOption.classList.toggle('hidden', sessionsCount < 2);
 
       // Determine transfer mode suggestion
       const hasMapping = [...existingSelect.querySelectorAll<HTMLSelectElement>('.date-folder-select')]
@@ -541,6 +597,8 @@ async function runScan(skipCheck: boolean, sdPathOverride?: string) {
           newFolderInput.value = suggestion.folderName;
         }
       }
+      // If grouped suggested but only one date, fall back to new
+      if (suggestedMode === 'grouped' && sessionsCount < 2) suggestedMode = 'new';
 
       const radio = document.querySelector<HTMLInputElement>(`input[name="xfer-mode"][value="${suggestedMode}"]`);
       if (radio) radio.checked = true;
@@ -551,25 +609,36 @@ async function runScan(skipCheck: boolean, sdPathOverride?: string) {
       const geminiKey = await window.api.getSetting('geminiKey');
       if (geminiKey) {
         const imageExts = new Set(['.jpg', '.jpeg', '.heic', '.heif', '.png', '.tiff', '.tif']);
-        const images = media.filter((f: any) => {
-          const ext = f.name.split('.').pop()?.toLowerCase() ?? '';
-          return imageExts.has(`.${ext}`);
-        });
-        if (images.length > 0) {
-          const sample = images[Math.floor(images.length / 2)];
-          status.textContent = 'AI: describing images...';
-          const desc = await window.api.describeImage(sample.fullPath);
-          if (desc.ok && desc.description) {
-            topicInput.value = desc.description;
-            // Pre-fill per-session topic inputs with same suggestion
-            dateGroupsPreview.querySelectorAll<HTMLInputElement>('[data-session-topic]').forEach((el) => {
-              if (!el.value.trim()) el.value = desc.description!;
-            });
-            // Also append to new folder name if it ends with " - "
-            if (newFolderInput.value.endsWith(' - ')) {
-              newFolderInput.value += desc.description;
+        const isImage = (f: any) => imageExts.has(`.${f.name.split('.').pop()?.toLowerCase() ?? ''}`);
+        const sessions = sessionsFor(media);
+        const realSessions = [...sessions.entries()].filter(([k]) => k !== 'unknown');
+        status.textContent = '';
+
+        if (realSessions.length > 1) {
+          // Per-session AI suggestions, in parallel
+          await Promise.all(realSessions.map(async ([key, files]) => {
+            const images = files.filter(isImage);
+            if (images.length === 0) return;
+            const sample = images[Math.floor(images.length / 2)];
+            const desc = await window.api.describeImage(sample.fullPath);
+            if (!desc.ok || !desc.description) return;
+            const input = dateGroupsPreview.querySelector<HTMLInputElement>(`[data-session-topic="${CSS.escape(key)}"]`);
+            if (input && !input.value.trim()) input.value = desc.description;
+          }));
+        } else {
+          const images = media.filter(isImage);
+          if (images.length > 0) {
+            const sample = images[Math.floor(images.length / 2)];
+            const desc = await window.api.describeImage(sample.fullPath);
+            if (desc.ok && desc.description) {
+              topicInput.value = desc.description;
+              dateGroupsPreview.querySelectorAll<HTMLInputElement>('[data-session-topic]').forEach((el) => {
+                if (!el.value.trim()) el.value = desc.description!;
+              });
+              if (newFolderInput.value.endsWith(' - ')) {
+                newFolderInput.value += desc.description;
+              }
             }
-            status.textContent = `AI suggested: ${desc.description}`;
           }
         }
       }

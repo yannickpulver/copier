@@ -14,7 +14,7 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('source-status', listener);
     return () => ipcRenderer.removeListener('source-status', listener);
   },
-  scan: (sdPath: string, skipCheck?: boolean) => ipcRenderer.invoke('scan', sdPath, skipCheck),
+  scan: (sdPath: string, skipCheck?: boolean, disabledSources?: string[]) => ipcRenderer.invoke('scan', sdPath, skipCheck, disabledSources),
   cancelScan: () => ipcRenderer.invoke('cancel-scan'),
   listExistingFolders: (nasPath: string) =>
     ipcRenderer.invoke('list-existing-folders', nasPath),

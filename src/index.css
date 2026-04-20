@@ -1,1 +1,18 @@
 @import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+}
+
+/* OverlayScrollbars sets inline display:flex on host — ensure .hidden still wins */
+.hidden {
+  display: none !important;
+}
+
+/* Let main-content viewport be a flex column so mt-auto pushes transfer-section to bottom */
+#main-content > [data-overlayscrollbars-viewport] {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-height: 100%;
+}

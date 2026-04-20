@@ -28,7 +28,7 @@ function sendProgress(step: string, count: number, folder: string) {
 const createWindow = () => {
   mainWindow = new BrowserWindow({
     width: 700,
-    height: 600,
+    height: 780,
     titleBarStyle: 'hiddenInset',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -125,10 +125,11 @@ ipcMain.handle('cancel-scan', () => {
   scanAbort?.abort();
 });
 
-ipcMain.handle('scan', async (_event, sdPath: string, skipCheck?: boolean) => {
+ipcMain.handle('scan', async (_event, sdPath: string, skipCheck?: boolean, disabledSources?: string[]) => {
   scanAbort?.abort();
   scanAbort = new AbortController();
   const signal = scanAbort.signal;
+  const disabled = new Set(disabledSources ?? []);
 
   // 1. Scan SD
   sendProgress('sd', 0, 'Starting...');
@@ -164,7 +165,7 @@ ipcMain.handle('scan', async (_event, sdPath: string, skipCheck?: boolean) => {
   // Synology API
   const synoConfig = await loadSynologyConfig();
   let apiOk = false;
-  if (synoConfig) {
+  if (synoConfig && !disabled.has('Synology API')) {
     sources.push((async (): Promise<SourceResult> => {
       try {
         sendProgress('source', 0, 'Synology API: connecting...');
@@ -194,6 +195,11 @@ ipcMain.handle('scan', async (_event, sdPath: string, skipCheck?: boolean) => {
     typeof item === 'string' ? { path: item } : item
   );
   for (const cp of checkPaths) {
+    const label = cp.path.split('/').pop() ?? cp.path;
+    if (disabled.has(label)) {
+      console.log(`Skipping disabled source: ${label}`);
+      continue;
+    }
     if (cp.fallbackOnly && apiOk) {
       console.log(`Skipping fallback path: ${cp.path} (API succeeded)`);
       continue;
@@ -237,6 +243,7 @@ ipcMain.handle('scan', async (_event, sdPath: string, skipCheck?: boolean) => {
   return {
     total: sdFiles.length,
     backedUp: backedUp.length,
+    backedUpFiles: backedUp,
     missing,
     suggestedFolders,
     sources: results.map((r) => ({ name: r.name, ok: r.ok, error: r.error })),
