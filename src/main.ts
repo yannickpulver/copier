@@ -449,6 +449,14 @@ ipcMain.handle('browse-folder', async (_event, defaultPath?: string) => {
 // --- Folder Sync ---
 
 ipcMain.handle('sync-scan', async (_event, sourcePath: string, destPath: string) => {
+  const fs = await import('node:fs');
+  if (!fs.existsSync(sourcePath)) {
+    throw new Error('Source folder not found or unreachable');
+  }
+  if (!fs.existsSync(path.dirname(destPath))) {
+    throw new Error('Destination not online or unreachable');
+  }
+
   mainWindow?.webContents.send('sync-progress', { step: 'source', count: 0, folder: 'Scanning source...' });
   const sourceFiles = await walkFolder(sourcePath, (count, folder) => {
     mainWindow?.webContents.send('sync-progress', { step: 'source', count, folder });

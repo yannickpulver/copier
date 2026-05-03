@@ -1453,6 +1453,8 @@ syncTransferBtn.addEventListener('click', async () => {
     syncScanBtn.disabled = false;
     syncCancelBtn.classList.add('hidden');
   }
+
+  syncScanBtn.click();
 });
 
 syncCancelBtn.addEventListener('click', () => {
