@@ -12,7 +12,7 @@ const RAW_EXTS = new Set([
   '.cr3', '.cr2', '.arw', '.nef', '.dng', '.raf', '.orf', '.rw2',
 ]);
 
-const VIDEO_EXTS = new Set(['.mp4', '.mov', '.m4v', '.avi', '.mts']);
+const VIDEO_EXTS = new Set(['.mp4', '.mov', '.m4v', '.avi', '.mts', '.mxf', '.crm']);
 
 interface MetadataResult {
   captureDate?: string;

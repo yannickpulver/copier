@@ -19,7 +19,7 @@ export const MEDIA_EXTS = new Set([
   // Raw
   '.cr2', '.cr3', '.arw', '.nef', '.dng', '.raf', '.orf', '.rw2',
   // Video
-  '.mp4', '.mov', '.avi', '.mts', '.m4v',
+  '.mp4', '.mov', '.avi', '.mts', '.m4v', '.mxf', '.crm',
   // Sidecars
   '.xmp', '.aae',
 ]);
