@@ -560,12 +560,11 @@ async function runScan(skipCheck: boolean, sdPathOverride?: string) {
       // Build session groups preview
       renderSessionChips(media);
 
-      // Show camera subfolder option if cameras detected and jpgs present
+      // Show camera subfolder option if cameras detected
       const cameras = new Set(media.map((f: any) => f.camera).filter(Boolean));
-      const hasJpg = media.some((f: any) => /\.jpe?g$/i.test(f.name));
       const cameraSubfolderOption = document.getElementById('camera-subfolder-option')!;
       const cameraList = document.getElementById('camera-list')!;
-      if (cameras.size > 0 && hasJpg) {
+      if (cameras.size > 0) {
         cameraSubfolderOption.classList.remove('hidden');
         cameraList.textContent = `(${[...cameras].join(', ')})`;
       } else {
