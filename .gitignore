@@ -93,3 +93,9 @@ out/
 
 # Research cache
 .research/
+
+# Playwright MCP captures
+.playwright-mcp/
+
+# Stale Vite dist output (Electron build goes to out/)
+/dist/
