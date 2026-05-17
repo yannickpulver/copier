@@ -38,7 +38,10 @@ export async function enrichMetadata(
 async function extractMetadata(filePath: string): Promise<MetadataResult> {
   const ext = filePath.slice(filePath.lastIndexOf('.')).toLowerCase();
 
-  if (EXIF_EXTS.has(ext) || VIDEO_EXTS.has(ext)) {
+  if (ext === '.raf') {
+    const raf = await extractRafMetadata(filePath);
+    if (raf) return raf;
+  } else if (EXIF_EXTS.has(ext) || VIDEO_EXTS.has(ext)) {
     try {
       // RAW files (especially CR3/ISOBMFF) store EXIF beyond 128KB — read more for those
       const isRaw = RAW_EXTS.has(ext);
@@ -72,5 +75,38 @@ async function extractMetadata(filePath: string): Promise<MetadataResult> {
     return { captureDate: stat.mtime.toISOString() };
   } catch {
     return {};
+  }
+}
+
+async function extractRafMetadata(filePath: string): Promise<MetadataResult | null> {
+  // Fujifilm RAF: header at offset 84 has JPEG thumbnail offset/length;
+  // the thumbnail's EXIF contains Model and capture date.
+  let fh: fs.promises.FileHandle | undefined;
+  try {
+    fh = await fs.promises.open(filePath, 'r');
+    const header = Buffer.alloc(96);
+    await fh.read(header, 0, 96, 0);
+    if (header.toString('ascii', 0, 15) !== 'FUJIFILMCCD-RAW') return null;
+    const thumbOffset = header.readUInt32BE(84);
+    const thumbLength = header.readUInt32BE(88);
+    if (!thumbOffset || !thumbLength) return null;
+    const readLen = Math.min(thumbLength, 1024 * 1024);
+    const jpeg = Buffer.alloc(readLen);
+    await fh.read(jpeg, 0, readLen, thumbOffset);
+    const tags = ExifReader.load(jpeg, { expanded: true, excludeXmp: true });
+    const dateStr =
+      tags.exif?.DateTimeOriginal?.description ??
+      tags.exif?.DateTime?.description;
+    const camera = tags.exif?.Model?.description?.trim();
+    let captureDate: string | undefined;
+    if (dateStr) {
+      const iso = dateStr.replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3');
+      captureDate = new Date(iso).toISOString();
+    }
+    return { captureDate, camera };
+  } catch {
+    return null;
+  } finally {
+    await fh?.close();
   }
 }
