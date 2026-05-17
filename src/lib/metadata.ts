@@ -13,6 +13,7 @@ const RAW_EXTS = new Set([
 ]);
 
 const VIDEO_EXTS = new Set(['.mp4', '.mov', '.m4v', '.avi', '.mts', '.mxf', '.crm']);
+const ISOBMFF_VIDEO_EXTS = new Set(['.mp4', '.mov', '.m4v', '.crm']);
 
 interface MetadataResult {
   captureDate?: string;
@@ -41,6 +42,9 @@ async function extractMetadata(filePath: string): Promise<MetadataResult> {
   if (ext === '.raf') {
     const raf = await extractRafMetadata(filePath);
     if (raf) return raf;
+  } else if (ISOBMFF_VIDEO_EXTS.has(ext)) {
+    const video = await extractIsobmffMetadata(filePath);
+    if (video) return video;
   } else if (EXIF_EXTS.has(ext) || VIDEO_EXTS.has(ext)) {
     try {
       // RAW files (especially CR3/ISOBMFF) store EXIF beyond 128KB — read more for those
@@ -75,6 +79,138 @@ async function extractMetadata(filePath: string): Promise<MetadataResult> {
     return { captureDate: stat.mtime.toISOString() };
   } catch {
     return {};
+  }
+}
+
+interface AtomLocation { dataStart: number; dataEnd: number }
+
+async function findAtom(
+  fh: fs.promises.FileHandle,
+  type: string,
+  start: number,
+  end: number,
+): Promise<AtomLocation | null> {
+  const header = Buffer.alloc(16);
+  let pos = start;
+  while (pos + 8 <= end) {
+    const { bytesRead } = await fh.read(header, 0, 16, pos);
+    if (bytesRead < 8) return null;
+    let size = header.readUInt32BE(0);
+    const t = header.toString('latin1', 4, 8);
+    let headerSize = 8;
+    if (size === 1) {
+      if (bytesRead < 16) return null;
+      const hi = header.readUInt32BE(8);
+      const lo = header.readUInt32BE(12);
+      size = hi * 0x100000000 + lo;
+      headerSize = 16;
+    } else if (size === 0) {
+      size = end - pos;
+    }
+    if (size < headerSize) return null;
+    if (t === type) return { dataStart: pos + headerSize, dataEnd: pos + size };
+    pos += size;
+  }
+  return null;
+}
+
+async function readRange(
+  fh: fs.promises.FileHandle,
+  start: number,
+  end: number,
+  cap = 4 * 1024 * 1024,
+): Promise<Buffer> {
+  const len = Math.min(end - start, cap);
+  const buf = Buffer.alloc(len);
+  const { bytesRead } = await fh.read(buf, 0, len, start);
+  return buf.subarray(0, bytesRead);
+}
+
+async function extractIsobmffMetadata(filePath: string): Promise<MetadataResult | null> {
+  let fh: fs.promises.FileHandle | undefined;
+  try {
+    fh = await fs.promises.open(filePath, 'r');
+    const { size: fileSize } = await fh.stat();
+
+    const moov = await findAtom(fh, 'moov', 0, fileSize);
+    if (!moov) return null;
+
+    // Try moov/meta (full box: 4-byte version+flags) and moov/udta/meta
+    let metaStart: number | null = null;
+    let metaEnd: number | null = null;
+    const meta1 = await findAtom(fh, 'meta', moov.dataStart, moov.dataEnd);
+    if (meta1) {
+      metaStart = meta1.dataStart + 4;
+      metaEnd = meta1.dataEnd;
+    } else {
+      const udta = await findAtom(fh, 'udta', moov.dataStart, moov.dataEnd);
+      if (udta) {
+        const meta2 = await findAtom(fh, 'meta', udta.dataStart, udta.dataEnd);
+        if (meta2) {
+          metaStart = meta2.dataStart + 4;
+          metaEnd = meta2.dataEnd;
+        }
+      }
+    }
+    if (metaStart === null || metaEnd === null) return null;
+
+    const keys = await findAtom(fh, 'keys', metaStart, metaEnd);
+    const ilst = await findAtom(fh, 'ilst', metaStart, metaEnd);
+    if (!ilst) return null;
+
+    const keyList: string[] = [];
+    if (keys) {
+      const buf = await readRange(fh, keys.dataStart + 4, keys.dataEnd);
+      const count = buf.readUInt32BE(0);
+      let off = 4;
+      for (let i = 0; i < count && off + 8 <= buf.length; i++) {
+        const size = buf.readUInt32BE(off);
+        if (size < 8 || off + size > buf.length) break;
+        keyList.push(buf.toString('utf8', off + 8, off + size));
+        off += size;
+      }
+    }
+
+    const ilstBuf = await readRange(fh, ilst.dataStart, ilst.dataEnd);
+    let model: string | undefined;
+    let dateStr: string | undefined;
+    let off = 0;
+    while (off + 8 <= ilstBuf.length) {
+      const size = ilstBuf.readUInt32BE(off);
+      if (size < 8 || off + size > ilstBuf.length) break;
+      const idx = ilstBuf.readUInt32BE(off + 4);
+      const typeAscii = ilstBuf.toString('latin1', off + 4, off + 8);
+      const key = keyList[idx - 1] ?? typeAscii;
+
+      if (off + 16 <= off + size) {
+        const dataSize = ilstBuf.readUInt32BE(off + 8);
+        const dataType = ilstBuf.toString('latin1', off + 12, off + 16);
+        if (dataType === 'data' && dataSize >= 16 && off + 8 + dataSize <= off + size) {
+          const payload = ilstBuf
+            .toString('utf8', off + 24, off + 8 + dataSize)
+            .replace(/\0+$/, '')
+            .trim();
+          if (/(^|\.)model$/i.test(key) || key === '©mod') {
+            model = payload;
+          } else if (/(creationdate|date$)/i.test(key) || key === '©day') {
+            dateStr ??= payload;
+          }
+        }
+      }
+      off += size;
+    }
+
+    let captureDate: string | undefined;
+    if (dateStr) {
+      const d = new Date(dateStr);
+      if (!isNaN(d.getTime())) captureDate = d.toISOString();
+    }
+    if (!model && !captureDate) return null;
+    return { captureDate, camera: model };
+  } catch {
+    return null;
+  } finally {
+    await fh?.close();
   }
 }
 
