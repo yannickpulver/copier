@@ -376,8 +376,9 @@ function renderSessionFolderMappings(files: any[], existingFolders: string[]) {
   lastExistingFolders = existingFolders;
   const sessions = sessionsFor(files);
   const reversedFolders = [...existingFolders].reverse();
-  const folderOptions = [
+  const baseOptions = [
     '<option value="">— skip —</option>',
+    '<option value="__new__">+ New folder</option>',
     ...reversedFolders.map((f) => `<option value="${escapeHtml(f)}">${escapeHtml(f)}</option>`),
   ].join('');
 
@@ -387,17 +388,57 @@ function renderSessionFolderMappings(files: any[], existingFolders: string[]) {
       const label = sessionLabel(key);
       const datePrefix = key.split('#')[0].replace(/-/g, '.');
       const match = reversedFolders.find((f) => f.startsWith(datePrefix)) ?? '';
-      const opts = folderOptions.replace(
+      const opts = baseOptions.replace(
         `value="${escapeHtml(match)}"`,
         `value="${escapeHtml(match)}" selected`,
       );
+      const newName = sessionDatePrefix(key);
       return `<div class="flex items-center gap-2" data-session="${escapeHtml(key)}">
         <span class="text-[11px] text-neutral-400 w-28 shrink-0">${escapeHtml(label)} <span class="text-neutral-500">(${sessionFiles.length})</span></span>
         <select class="date-folder-select flex-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-0.5 text-[11px] text-neutral-300 focus:outline-none focus:border-blue-500">${opts}</select>
+        <input type="text" class="new-folder-input hidden flex-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-0.5 text-[11px] text-neutral-300 focus:outline-none focus:border-blue-500" placeholder="folder name" value="${escapeHtml(newName)}" />
       </div>`;
     })
     .join('');
+  void autoCheckCameraSubfolder();
 }
+
+async function autoCheckCameraSubfolder() {
+  const basePath = transferDest.value;
+  if (!basePath) return;
+  const cameras = new Set(missingFiles.map((f: any) => f.camera).filter(Boolean) as string[]);
+  if (cameras.size === 0) return;
+  const checkbox = document.getElementById('camera-subfolder') as HTMLInputElement | null;
+  if (!checkbox || checkbox.checked) return;
+  const selectedFolders = [...existingSelect.querySelectorAll<HTMLSelectElement>('.date-folder-select')]
+    .map((s) => s.value)
+    .filter(Boolean);
+  for (const folder of selectedFolders) {
+    const subfolders = await window.api.listExistingFolders(`${basePath}/${folder}`);
+    if (subfolders.some((sf) => cameras.has(sf))) {
+      checkbox.checked = true;
+      return;
+    }
+  }
+}
+
+existingSelect.addEventListener('change', (e) => {
+  const target = e.target as HTMLElement;
+  if (target.classList.contains('date-folder-select')) {
+    const select = target as HTMLSelectElement;
+    const row = select.closest('[data-session]');
+    const input = row?.querySelector<HTMLInputElement>('.new-folder-input');
+    input?.classList.toggle('hidden', select.value !== '__new__');
+    void autoCheckCameraSubfolder();
+    updateTransferButtonCount();
+  }
+});
+
+existingSelect.addEventListener('input', (e) => {
+  if ((e.target as HTMLElement).classList.contains('new-folder-input')) {
+    updateTransferButtonCount();
+  }
+});
 
 // --- Scan ---
 
@@ -555,7 +596,7 @@ async function runScan(skipCheck: boolean, sdPathOverride?: string) {
 
     if (media.length > 0) {
       transferSection.classList.remove('hidden');
-      transferBtn.textContent = `Transfer ${media.length} files`;
+      updateTransferButtonCount();
 
       // Build session groups preview
       renderSessionChips(media);
@@ -603,6 +644,7 @@ async function runScan(skipCheck: boolean, sdPathOverride?: string) {
       if (radio) radio.checked = true;
       dateGroupsPreview.classList.toggle('hidden', suggestedMode !== 'grouped');
       existingSelect.classList.toggle('hidden', suggestedMode !== 'existing');
+      updateTransferButtonCount();
 
       // Gemini: describe a sample image to suggest a topic
       const geminiKey = await window.api.getSetting('geminiKey');
@@ -668,6 +710,7 @@ document.querySelectorAll<HTMLInputElement>('input[name="xfer-mode"]').forEach((
     const selected = document.querySelector<HTMLInputElement>('input[name="xfer-mode"]:checked');
     dateGroupsPreview.classList.toggle('hidden', selected?.value !== 'grouped');
     existingSelect.classList.toggle('hidden', selected?.value !== 'existing');
+    updateTransferButtonCount();
   });
 });
 
@@ -693,8 +736,7 @@ dateGroupsPreview.addEventListener('click', (e) => {
 });
 
 dateGroupsPreview.addEventListener('change', () => {
-  const count = getFilteredFiles().length;
-  transferBtn.textContent = `Transfer ${count} files`;
+  updateTransferButtonCount();
 });
 
 // --- Transfer ---
@@ -710,6 +752,7 @@ transferBtn.addEventListener('click', async () => {
   const filesToTransfer = mode === 'grouped' ? getFilteredFiles() : missingFiles;
   if (!filesToTransfer.length) return;
 
+  const sdPathAtStart = sdSelect.value;
   const basePath = transferDest.value;
   if (!basePath) return;
 
@@ -722,10 +765,14 @@ transferBtn.addEventListener('click', async () => {
   } else if (mode === 'existing') {
     const rows = [...existingSelect.querySelectorAll<HTMLDivElement>('[data-session]')];
     const mappings = rows
-      .map((row) => ({
-        session: row.dataset.session!,
-        folder: row.querySelector<HTMLSelectElement>('.date-folder-select')!.value,
-      }))
+      .map((row) => {
+        const select = row.querySelector<HTMLSelectElement>('.date-folder-select')!;
+        let folder = select.value;
+        if (folder === '__new__') {
+          folder = row.querySelector<HTMLInputElement>('.new-folder-input')?.value.trim() ?? '';
+        }
+        return { session: row.dataset.session!, folder };
+      })
       .filter((m) => m.folder);
     if (mappings.length === 0) return;
     const sessions = sessionsFor(filesToTransfer);
@@ -770,9 +817,11 @@ transferBtn.addEventListener('click', async () => {
       progressBar.style.width = '100%';
       progressLabel.textContent = result.errors.length ? `Done — ${result.errors.length} errors` : 'Done!';
       status.textContent = 'Transfer complete — rescanning...';
-      const rescanPath = sdSelect.value;
+      if (sdCards.find((c) => c.path === sdPathAtStart)) {
+        sdSelect.value = sdPathAtStart;
+      }
       await new Promise((r) => setTimeout(r, 800));
-      runScan(false, rescanPath);
+      runScan(false, sdPathAtStart);
     }
   } catch (e: any) {
     progressLabel.textContent = `Error: ${e.message}`;
@@ -900,8 +949,7 @@ function rerenderSessionViews(media: any[]) {
     }
   });
 
-  const count = getFilteredFiles().length;
-  transferBtn.textContent = `Transfer ${count} files`;
+  updateTransferButtonCount();
 }
 
 function toggleMergeDay(day: string) {
@@ -926,6 +974,27 @@ function getFilteredFiles(): typeof missingFiles {
     if (selected.has(key)) result.push(...files);
   }
   return result;
+}
+
+function updateTransferButtonCount() {
+  const mode = document.querySelector<HTMLInputElement>('input[name="xfer-mode"]:checked')?.value ?? 'new';
+  let count = missingFiles.length;
+  if (mode === 'existing') {
+    const sessions = sessionsFor(missingFiles);
+    const rows = [...existingSelect.querySelectorAll<HTMLDivElement>('[data-session]')];
+    count = rows.reduce((sum, row) => {
+      const select = row.querySelector<HTMLSelectElement>('.date-folder-select')!;
+      let folder = select.value;
+      if (folder === '__new__') {
+        folder = row.querySelector<HTMLInputElement>('.new-folder-input')?.value.trim() ?? '';
+      }
+      if (!folder) return sum;
+      return sum + (sessions.get(row.dataset.session!)?.length ?? 0);
+    }, 0);
+  } else if (mode === 'grouped') {
+    count = getFilteredFiles().length;
+  }
+  transferBtn.textContent = `Transfer ${count} files`;
 }
 
 // --- Helpers ---
