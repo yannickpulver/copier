@@ -131,6 +131,7 @@ ipcMain.handle('scan', async (_event, sdPath: string, skipCheck?: boolean, disab
   const signal = scanAbort.signal;
   const disabled = new Set(disabledSources ?? []);
 
+  try {
   // 1. Scan SD
   sendProgress('sd', 0, 'Starting...');
   const sdFiles = await scanFiles(sdPath, (count, folder) => {
@@ -248,6 +249,12 @@ ipcMain.handle('scan', async (_event, sdPath: string, skipCheck?: boolean, disab
     suggestedFolders,
     sources: results.map((r) => ({ name: r.name, ok: r.ok, error: r.error })),
   };
+  } catch (e: any) {
+    if (e?.message === 'aborted' || signal.aborted) {
+      return { aborted: true, total: 0, backedUp: 0, missing: [], suggestedFolders: [], sources: [] };
+    }
+    throw e;
+  }
 });
 
 ipcMain.handle('list-existing-folders', (_event, nasPath: string) => {

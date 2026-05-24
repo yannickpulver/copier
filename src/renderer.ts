@@ -12,6 +12,7 @@ declare global {
       onSourceStatus: (cb: (data: { index: number; available: boolean }) => void) => () => void;
       cancelScan: () => Promise<void>;
       scan: (sdPath: string, skipCheck?: boolean, disabledSources?: string[]) => Promise<{
+        aborted?: boolean;
         total: number;
         backedUp: number;
         backedUpFiles?: { name: string; size: number; fullPath: string; captureDate?: string; isMedia?: boolean }[];
@@ -494,6 +495,10 @@ async function runScan(skipCheck: boolean, sdPathOverride?: string) {
   try {
     const result = await window.api.scan(sdPath, skipCheck, [...disabledSources]);
     if (gen !== scanGeneration) return;
+    if (result.aborted) {
+      status.textContent = '';
+      return;
+    }
 
     const media = result.missing.filter((f) => f.isMedia !== false);
 
