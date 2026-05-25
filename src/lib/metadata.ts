@@ -56,10 +56,10 @@ async function extractMetadata(filePath: string): Promise<MetadataResult> {
 
   if (ext === '.raf') {
     const raf = await extractRafMetadata(filePath);
-    if (raf) return raf;
+    if (raf) return await fillDateFromMtime(filePath, raf);
   } else if (ISOBMFF_VIDEO_EXTS.has(ext)) {
     const video = await extractIsobmffMetadata(filePath);
-    if (video) return video;
+    if (video) return await fillDateFromMtime(filePath, video);
   } else if (EXIF_EXTS.has(ext) || VIDEO_EXTS.has(ext)) {
     try {
       // RAW files (especially CR3/ISOBMFF) store EXIF beyond 128KB — read more for those
@@ -94,6 +94,16 @@ async function extractMetadata(filePath: string): Promise<MetadataResult> {
     return { captureDate: stat.mtime.toISOString() };
   } catch {
     return {};
+  }
+}
+
+async function fillDateFromMtime(filePath: string, result: MetadataResult): Promise<MetadataResult> {
+  if (result.captureDate) return result;
+  try {
+    const stat = await fs.promises.stat(filePath);
+    return { ...result, captureDate: stat.mtime.toISOString() };
+  } catch {
+    return result;
   }
 }
 
@@ -251,6 +261,10 @@ async function readClassicUdta(
       if (textLen > 0 && start + textLen <= off + size) {
         const payload = buf.toString('utf8', start, start + textLen).replace(/\0+$/, '').trim();
         if (type === '©mod' || type === '©make') model ??= payload;
+        else if (type === '©inf') {
+          const cleaned = payload.replace(/^FUJIFILM\s+DIGITAL\s+CAMERA\s+/i, '').trim();
+          if (cleaned && cleaned.toLowerCase() !== 'digital camera') model ??= cleaned;
+        }
         else if (type === '©day') dateStr ??= payload;
       }
     }
