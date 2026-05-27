@@ -75,6 +75,7 @@ const otherLabel = $('#other-label');
 const otherList = $<HTMLTableSectionElement>('#other-list');
 
 let sdCards: { name: string; path: string }[] = [];
+let transferInProgress = false;
 let missingFiles: any[] = [];
 let scanGeneration = 0;
 const mergedDays = new Set<string>();
@@ -308,6 +309,10 @@ async function init() {
 }
 
 async function refreshSdCards() {
+  // Heavy IO during a transfer can make the SD volume briefly drop off the
+  // OS list. Don't touch the UI then — the copy keeps running in the background.
+  if (transferInProgress) return;
+
   const cards = await window.api.listSdCards();
   const paths = cards.map((c) => c.path).join(',');
   const oldPaths = sdCards.map((c) => c.path).join(',');
@@ -811,6 +816,7 @@ transferBtn.addEventListener('click', async () => {
   instantTransferBtn.disabled = true;
   cancelBtn.classList.remove('hidden');
   progressBar.style.width = '0%';
+  transferInProgress = true;
 
   try {
     const cameraSubfolder = $<HTMLInputElement>('#camera-subfolder').checked;
@@ -831,6 +837,7 @@ transferBtn.addEventListener('click', async () => {
   } catch (e: any) {
     progressLabel.textContent = `Error: ${e.message}`;
   } finally {
+    transferInProgress = false;
     transferBtn.disabled = false;
     scanBtn.disabled = false;
     instantTransferBtn.disabled = false;
