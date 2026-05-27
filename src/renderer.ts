@@ -1,6 +1,9 @@
 import './index.css';
 import { OverlayScrollbars } from 'overlayscrollbars';
 import 'overlayscrollbars/overlayscrollbars.css';
+import { formatFolderDate, DEFAULT_DATE_FORMAT } from './lib/dateFormat';
+
+let folderDateFormat = DEFAULT_DATE_FORMAT;
 
 declare global {
   interface Window {
@@ -60,8 +63,31 @@ const fileList = $<HTMLDivElement>('#file-list');
 const transferSection = $('#transfer-section');
 const newFolderInput = $<HTMLInputElement>('#new-folder-name');
 const existingSelect = $<HTMLDivElement>('#existing-folders');
+const existingAllSelect = $<HTMLSelectElement>('#existing-all-select');
+const existingAllNew = $<HTMLInputElement>('#existing-all-new');
 const topicInput = $<HTMLInputElement>('#topic');
 const dateGroupsPreview = $('#date-groups-preview');
+const groupByDateCb = $<HTMLInputElement>('#group-by-date');
+const groupByDateOption = $('#group-by-date-option');
+
+/** Resolve UI controls to an internal transfer mode. "New folder" + the
+ *  "Separate folder per date" checkbox maps to the grouped (per-date) mode. */
+function currentMode(): 'new' | 'existing' | 'grouped' {
+  const radio = document.querySelector<HTMLInputElement>('input[name="xfer-mode"]:checked')?.value ?? 'new';
+  if (radio === 'new' && groupByDateCb.checked) return 'grouped';
+  return radio as 'new' | 'existing';
+}
+
+/** Show the correct sub-sections for the current mode. */
+function updateModeVisibility() {
+  const radio = document.querySelector<HTMLInputElement>('input[name="xfer-mode"]:checked')?.value ?? 'new';
+  const mode = currentMode();
+  newFolderInput.disabled = mode === 'grouped';
+  dateGroupsPreview.classList.toggle('hidden', mode !== 'grouped');
+  existingSelect.classList.toggle('hidden', mode !== 'existing');
+  // The per-date checkbox only applies to "New folder".
+  groupByDateOption.classList.toggle('hidden', radio !== 'new' || !groupByDateOption.dataset.available);
+}
 const transferDest = $<HTMLSelectElement>('#transfer-dest');
 const browseDestBtn = $('#browse-dest-btn');
 const transferBtn = $<HTMLButtonElement>('#transfer-btn');
@@ -188,7 +214,7 @@ function dayHasSplits(files: any[], day: string): boolean {
 function sessionLabel(key: string): string {
   if (key === 'unknown') return 'Unknown date';
   const [day, idx] = key.split('#');
-  const dateStr = day.replace(/-/g, '.');
+  const dateStr = formatFolderDate(day, folderDateFormat);
   if (idx === undefined) return dateStr;
   const suffix = String.fromCharCode(97 + parseInt(idx)); // a, b, c...
   return `${dateStr}${suffix}`;
@@ -196,7 +222,7 @@ function sessionLabel(key: string): string {
 
 function sessionDatePrefix(key: string): string {
   const [day, idx] = key.split('#');
-  const dateStr = day.replace(/-/g, '.');
+  const dateStr = formatFolderDate(day, folderDateFormat);
   if (idx === undefined) return dateStr;
   const suffix = String.fromCharCode(97 + parseInt(idx));
   return `${dateStr}${suffix}`;
@@ -302,7 +328,11 @@ async function init() {
 
   const sourcesPromise = window.api.checkSourcesStatus();
 
-  await Promise.all([destsPromise, sdPromise, sourcesPromise]);
+  const formatPromise = window.api.getSetting('dateFormat').then((fmt: string) => {
+    folderDateFormat = fmt || DEFAULT_DATE_FORMAT;
+  });
+
+  await Promise.all([destsPromise, sdPromise, sourcesPromise, formatPromise]);
 
   setInterval(refreshSdCards, 3000);
   setInterval(() => window.api.checkSourcesStatus(), 10000);
@@ -388,8 +418,11 @@ function renderSessionFolderMappings(files: any[], existingFolders: string[]) {
     ...reversedFolders.map((f) => `<option value="${escapeHtml(f)}">${escapeHtml(f)}</option>`),
   ].join('');
 
-  existingSelect.innerHTML = [...sessions.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
+  const sessionEntries = [...sessions.entries()].sort(([a], [b]) => a.localeCompare(b));
+  const multi = sessionEntries.length > 1;
+
+  // Per-date rows (only used when "Individual per date" is on).
+  const rows = sessionEntries
     .map(([key, sessionFiles]) => {
       const label = sessionLabel(key);
       const datePrefix = key.split('#')[0].replace(/-/g, '.');
@@ -406,6 +439,35 @@ function renderSessionFolderMappings(files: any[], existingFolders: string[]) {
       </div>`;
     })
     .join('');
+
+  // Single folder for all dates (default). Auto-match only when there's one session.
+  const singleMatch = !multi && sessionEntries.length
+    ? reversedFolders.find((f) => f.startsWith(sessionEntries[0][0].split('#')[0].replace(/-/g, '.'))) ?? ''
+    : '';
+  const singleOpts = baseOptions.replace(
+    `value="${escapeHtml(singleMatch)}"`,
+    `value="${escapeHtml(singleMatch)}" selected`,
+  );
+  const singleNewName = sessionEntries.length ? sessionDatePrefix(sessionEntries[0][0]) : '';
+
+  const toggle = multi
+    ? `<label class="flex items-center gap-2 cursor-pointer pt-0.5">
+        <input type="checkbox" class="individual-cb accent-blue-500 scale-90" />
+        <span class="text-xs text-neutral-400">Separate folder per date</span>
+      </label>`
+    : '';
+
+  // Single folder selector lives inline next to the "Existing folder:" radio.
+  existingAllSelect.innerHTML = singleOpts;
+  existingAllSelect.disabled = false;
+  existingAllNew.value = singleNewName;
+  existingAllNew.disabled = false;
+  existingAllNew.classList.toggle('hidden', existingAllSelect.value !== '__new__');
+
+  // The div holds only the per-date toggle and its rows.
+  existingSelect.innerHTML = `
+    ${toggle}
+    <div class="per-session-rows hidden flex flex-col gap-1 w-full">${rows}</div>`;
   void autoCheckCameraSubfolder();
 }
 
@@ -416,9 +478,9 @@ async function autoCheckCameraSubfolder() {
   if (cameras.size === 0) return;
   const checkbox = document.getElementById('camera-subfolder') as HTMLInputElement | null;
   if (!checkbox || checkbox.checked) return;
-  const selectedFolders = [...existingSelect.querySelectorAll<HTMLSelectElement>('.date-folder-select')]
+  const selectedFolders = [existingAllSelect, ...existingSelect.querySelectorAll<HTMLSelectElement>('.date-folder-select')]
     .map((s) => s.value)
-    .filter(Boolean);
+    .filter((v) => v && v !== '__new__');
   for (const folder of selectedFolders) {
     const subfolders = await window.api.listExistingFolders(`${basePath}/${folder}`);
     if (subfolders.some((sf) => cameras.has(sf))) {
@@ -428,12 +490,29 @@ async function autoCheckCameraSubfolder() {
   }
 }
 
+// Inline single-folder selector (sits next to the "Existing folder:" radio).
+existingAllSelect.addEventListener('change', () => {
+  existingAllNew.classList.toggle('hidden', existingAllSelect.value !== '__new__');
+  void autoCheckCameraSubfolder();
+  updateTransferButtonCount();
+});
+existingAllNew.addEventListener('input', updateTransferButtonCount);
+
+// Per-date toggle + per-session rows live inside #existing-folders.
 existingSelect.addEventListener('change', (e) => {
   const target = e.target as HTMLElement;
+  if (target.classList.contains('individual-cb')) {
+    const individual = (target as HTMLInputElement).checked;
+    existingAllSelect.disabled = individual;
+    existingAllNew.disabled = individual;
+    existingSelect.querySelector('.per-session-rows')?.classList.toggle('hidden', !individual);
+    void autoCheckCameraSubfolder();
+    updateTransferButtonCount();
+    return;
+  }
   if (target.classList.contains('date-folder-select')) {
     const select = target as HTMLSelectElement;
-    const row = select.closest('[data-session]');
-    const input = row?.querySelector<HTMLInputElement>('.new-folder-input');
+    const input = select.closest('[data-session]')?.querySelector<HTMLInputElement>('.new-folder-input');
     input?.classList.toggle('hidden', select.value !== '__new__');
     void autoCheckCameraSubfolder();
     updateTransferButtonCount();
@@ -629,10 +708,9 @@ async function runScan(skipCheck: boolean, sdPathOverride?: string) {
         renderSessionFolderMappings(media, folders);
       }
 
-      // Hide "Group by date" option if only one date
+      // "Separate folder per date" only applies when there's more than one date
       const sessionsCount = [...sessionsFor(media).keys()].filter((k) => k !== 'unknown').length;
-      const groupedOption = document.getElementById('grouped-option');
-      if (groupedOption) groupedOption.classList.toggle('hidden', sessionsCount < 2);
+      groupByDateOption.dataset.available = sessionsCount >= 2 ? '1' : '';
 
       // Determine transfer mode suggestion
       const hasMapping = [...existingSelect.querySelectorAll<HTMLSelectElement>('.date-folder-select')]
@@ -650,10 +728,20 @@ async function runScan(skipCheck: boolean, sdPathOverride?: string) {
       // If grouped suggested but only one date, fall back to new
       if (suggestedMode === 'grouped' && sessionsCount < 2) suggestedMode = 'new';
 
-      const radio = document.querySelector<HTMLInputElement>(`input[name="xfer-mode"][value="${suggestedMode}"]`);
+      // Apply suggestion: grouped = "New folder" radio + per-date checkbox on.
+      const radioVal = suggestedMode === 'grouped' ? 'new' : suggestedMode;
+      const radio = document.querySelector<HTMLInputElement>(`input[name="xfer-mode"][value="${radioVal}"]`);
       if (radio) radio.checked = true;
-      dateGroupsPreview.classList.toggle('hidden', suggestedMode !== 'grouped');
-      existingSelect.classList.toggle('hidden', suggestedMode !== 'existing');
+      groupByDateCb.checked = suggestedMode === 'grouped';
+      updateModeVisibility();
+
+      // Multiple dates already matching existing folders → switch on per-date mode
+      // so each maps to its own folder instead of defaulting to a single one.
+      const individualCb = existingSelect.querySelector<HTMLInputElement>('.individual-cb');
+      if (suggestedMode === 'existing' && hasMapping && individualCb) {
+        individualCb.checked = true;
+        individualCb.dispatchEvent(new Event('change', { bubbles: true }));
+      }
       updateTransferButtonCount();
 
       // Gemini: describe a sample image to suggest a topic
@@ -714,14 +802,17 @@ sdSelect.addEventListener('change', () => {
   resetResults();
 });
 
-// Toggle date groups preview
+// Toggle sub-sections when mode changes
 document.querySelectorAll<HTMLInputElement>('input[name="xfer-mode"]').forEach((radio) => {
   radio.addEventListener('change', () => {
-    const selected = document.querySelector<HTMLInputElement>('input[name="xfer-mode"]:checked');
-    dateGroupsPreview.classList.toggle('hidden', selected?.value !== 'grouped');
-    existingSelect.classList.toggle('hidden', selected?.value !== 'existing');
+    updateModeVisibility();
     updateTransferButtonCount();
   });
+});
+
+groupByDateCb.addEventListener('change', () => {
+  updateModeVisibility();
+  updateTransferButtonCount();
 });
 
 // Delegated handlers: click-to-reveal on fileList rows; merge/unmerge buttons
@@ -758,7 +849,7 @@ window.api.onTransferProgress(({ current, total }) => {
 });
 
 transferBtn.addEventListener('click', async () => {
-  const mode = (document.querySelector<HTMLInputElement>('input[name="xfer-mode"]:checked'))?.value ?? 'new';
+  const mode = currentMode();
   const filesToTransfer = mode === 'grouped' ? getFilteredFiles() : missingFiles;
   if (!filesToTransfer.length) return;
 
@@ -773,23 +864,8 @@ transferBtn.addEventListener('click', async () => {
     if (!name) return;
     dest = `${basePath}/${name}`;
   } else if (mode === 'existing') {
-    const rows = [...existingSelect.querySelectorAll<HTMLDivElement>('[data-session]')];
-    const mappings = rows
-      .map((row) => {
-        const select = row.querySelector<HTMLSelectElement>('.date-folder-select')!;
-        let folder = select.value;
-        if (folder === '__new__') {
-          folder = row.querySelector<HTMLInputElement>('.new-folder-input')?.value.trim() ?? '';
-        }
-        return { session: row.dataset.session!, folder };
-      })
-      .filter((m) => m.folder);
-    if (mappings.length === 0) return;
-    const sessions = sessionsFor(filesToTransfer);
     dest = basePath;
-    fileGroups = mappings
-      .map((m) => ({ dest: `${basePath}/${m.folder}`, files: sessions.get(m.session) ?? [] }))
-      .filter((g) => g.files.length > 0);
+    fileGroups = existingModeGroups(filesToTransfer, basePath);
     if (fileGroups.length === 0) return;
   } else {
     // grouped mode — build session-aware file groups
@@ -861,7 +937,7 @@ function suggestTransferMode(
     const key = sessionKeys[0];
     const dateStr = key
       ? sessionDatePrefix(key)
-      : new Date().toISOString().slice(0, 10).replace(/-/g, '.');
+      : formatFolderDate(new Date().toISOString().slice(0, 10), folderDateFormat);
     return { mode: 'new', folderName: `${dateStr} - ` };
   }
 
@@ -988,21 +1064,37 @@ function getFilteredFiles(): typeof missingFiles {
   return result;
 }
 
+// Build dest→files groups for "existing folder" mode. Default: one folder for all
+// files; with "Individual per date" on: one folder per session row.
+function existingModeGroups(files: any[], basePath: string): { dest: string; files: any[] }[] {
+  const individual = existingSelect.querySelector<HTMLInputElement>('.individual-cb')?.checked ?? false;
+  const sessions = sessionsFor(files);
+  if (individual) {
+    return [...existingSelect.querySelectorAll<HTMLDivElement>('[data-session]')]
+      .map((row) => {
+        const select = row.querySelector<HTMLSelectElement>('.date-folder-select')!;
+        let folder = select.value;
+        if (folder === '__new__') {
+          folder = row.querySelector<HTMLInputElement>('.new-folder-input')?.value.trim() ?? '';
+        }
+        return { dest: folder ? `${basePath}/${folder}` : '', files: sessions.get(row.dataset.session!) ?? [] };
+      })
+      .filter((g) => g.dest && g.files.length > 0);
+  }
+  let folder = existingAllSelect.value;
+  if (folder === '__new__') {
+    folder = existingAllNew.value.trim();
+  }
+  if (!folder) return [];
+  return [{ dest: `${basePath}/${folder}`, files: [...files] }];
+}
+
 function updateTransferButtonCount() {
-  const mode = document.querySelector<HTMLInputElement>('input[name="xfer-mode"]:checked')?.value ?? 'new';
+  const mode = currentMode();
   let count = missingFiles.length;
   if (mode === 'existing') {
-    const sessions = sessionsFor(missingFiles);
-    const rows = [...existingSelect.querySelectorAll<HTMLDivElement>('[data-session]')];
-    count = rows.reduce((sum, row) => {
-      const select = row.querySelector<HTMLSelectElement>('.date-folder-select')!;
-      let folder = select.value;
-      if (folder === '__new__') {
-        folder = row.querySelector<HTMLInputElement>('.new-folder-input')?.value.trim() ?? '';
-      }
-      if (!folder) return sum;
-      return sum + (sessions.get(row.dataset.session!)?.length ?? 0);
-    }, 0);
+    count = existingModeGroups(missingFiles, transferDest.value)
+      .reduce((sum, g) => sum + g.files.length, 0);
   } else if (mode === 'grouped') {
     count = getFilteredFiles().length;
   }
@@ -1094,7 +1186,7 @@ settingsToggle.addEventListener('click', async () => {
     const cfgPathsList = document.getElementById('cfg-paths-list')!;
     const cfgDestsList = document.getElementById('cfg-dests-list')!;
 
-    const [host, port, user, pass, folders, secure, checkPaths, savedDests, geminiKey] = await Promise.all([
+    const [host, port, user, pass, folders, secure, checkPaths, savedDests, geminiKey, dateFormat] = await Promise.all([
       window.api.getSetting('synologyHost'),
       window.api.getSetting('synologyPort'),
       window.api.getSetting('synologyUser'),
@@ -1104,6 +1196,7 @@ settingsToggle.addEventListener('click', async () => {
       window.api.getSetting('checkPaths'),
       window.api.getSetting('transferDests'),
       window.api.getSetting('geminiKey'),
+      window.api.getSetting('dateFormat'),
     ]);
     cfgHost.value = host ?? '';
     cfgPort.value = String(port ?? 5001);
@@ -1120,6 +1213,8 @@ settingsToggle.addEventListener('click', async () => {
     renderSynoFolderChips(document.getElementById('cfg-folders-list')!);
     cfgSecure.checked = secure ?? true;
     $<HTMLInputElement>('#cfg-gemini-key').value = geminiKey ?? '';
+    $<HTMLInputElement>('#cfg-date-format').value = dateFormat ?? DEFAULT_DATE_FORMAT;
+    updateDateFormatPreview();
 
     currentCheckPaths = normalizeCheckPaths(checkPaths);
     renderPathChips(cfgPathsList);
@@ -1252,6 +1347,18 @@ document.getElementById('cfg-add-dest')!.addEventListener('click', async () => {
   }
 });
 
+function updateDateFormatPreview() {
+  const input = $<HTMLInputElement>('#cfg-date-format');
+  const fmt = input.value.trim() || DEFAULT_DATE_FORMAT;
+  const today = new Date().toISOString().slice(0, 10);
+  const preview = document.getElementById('cfg-date-preview');
+  if (preview) preview.textContent = formatFolderDate(today, fmt);
+  const summary = document.getElementById('card-naming-summary');
+  if (summary) summary.textContent = fmt;
+}
+
+$<HTMLInputElement>('#cfg-date-format').addEventListener('input', updateDateFormatPreview);
+
 cfgSave.addEventListener('click', async () => {
   await Promise.all([
     window.api.setSetting('synologyHost', cfgHost.value || undefined),
@@ -1263,7 +1370,10 @@ cfgSave.addEventListener('click', async () => {
     window.api.setSetting('checkPaths', currentCheckPaths.length ? currentCheckPaths as any : undefined),
     window.api.setSetting('transferDests', currentTransferDests.length ? currentTransferDests : undefined),
     window.api.setSetting('geminiKey', $<HTMLInputElement>('#cfg-gemini-key').value || undefined),
+    window.api.setSetting('dateFormat', $<HTMLInputElement>('#cfg-date-format').value.trim() || undefined),
   ]);
+
+  folderDateFormat = $<HTMLInputElement>('#cfg-date-format').value.trim() || DEFAULT_DATE_FORMAT;
 
   // Sync transfer dests to main screen + sync tab
   transferDests = [...currentTransferDests];

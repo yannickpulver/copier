@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { FileInfo } from './types';
+import { formatFolderDate, DEFAULT_DATE_FORMAT } from './dateFormat';
 
 async function preserveTimestamps(src: string, dest: string): Promise<void> {
   const stat = await fs.promises.stat(src);
@@ -53,13 +54,14 @@ export async function copyFilesGroupedByDate(
   topic: string,
   onProgress?: (current: number, total: number, name: string) => void,
   signal?: AbortSignal,
+  dateFormat: string = DEFAULT_DATE_FORMAT,
 ): Promise<string[]> {
   const errors: string[] = [];
   const grouped = new Map<string, FileInfo[]>();
 
   for (const f of files) {
     const date = f.captureDate
-      ? new Date(f.captureDate).toISOString().slice(0, 10).replace(/-/g, '.')
+      ? formatFolderDate(new Date(f.captureDate).toISOString().slice(0, 10), dateFormat)
       : 'unknown';
     const existing = grouped.get(date);
     if (existing) {

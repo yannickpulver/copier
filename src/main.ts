@@ -51,7 +51,17 @@ app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) creat
 // --- IPC Handlers ---
 
 ipcMain.handle('list-sd-cards', async () => {
-  return listSdCards();
+  const cards = await listSdCards();
+  // Dev convenience: expose a fake SD card backed by a local fixture so the
+  // scan/transfer flow can be exercised without inserting real media.
+  if (!app.isPackaged) {
+    const fs = await import('node:fs');
+    const testPath = process.env.COPIER_TEST_SD || path.join(process.cwd(), 'dev-fixtures', 'test-sd');
+    if (fs.existsSync(testPath)) {
+      cards.unshift({ name: 'Test SD (dev)', path: testPath });
+    }
+  }
+  return cards;
 });
 
 ipcMain.handle('test-synology', async (_event, host: string, port: number, user: string, pass: string, secure: boolean, folders: string) => {
@@ -271,6 +281,7 @@ ipcMain.handle('transfer', async (_event, files: FileInfo[], dest: string, mode:
   const onProgress = (current: number, total: number, name: string) => {
     mainWindow?.webContents.send('transfer-progress', { current, total, name });
   };
+  const dateFormat = getSetting('dateFormat') || undefined;
 
   try {
     // Multi-folder transfer (existing mode with multiple selected folders)
@@ -324,7 +335,7 @@ ipcMain.handle('transfer', async (_event, files: FileInfo[], dest: string, mode:
         if (mode === 'grouped') {
           errors = await copyFilesGroupedByDate(cameraFiles, cameraDest, topic ?? '', (c, t, n) => {
             onProgress(done + c, files.length, n);
-          }, signal);
+          }, signal, dateFormat);
         } else {
           errors = await copyFiles(cameraFiles, cameraDest, (c, t, n) => {
             onProgress(done + c, cameraFiles.length, n);
@@ -338,7 +349,7 @@ ipcMain.handle('transfer', async (_event, files: FileInfo[], dest: string, mode:
 
     let errors: string[];
     if (mode === 'grouped') {
-      errors = await copyFilesGroupedByDate(files, dest, topic ?? '', onProgress, signal);
+      errors = await copyFilesGroupedByDate(files, dest, topic ?? '', onProgress, signal, dateFormat);
     } else {
       errors = await copyFiles(files, dest, onProgress, signal);
     }

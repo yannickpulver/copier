@@ -57,6 +57,9 @@ async function extractMetadata(filePath: string): Promise<MetadataResult> {
   if (ext === '.raf') {
     const raf = await extractRafMetadata(filePath);
     if (raf) return await fillDateFromMtime(filePath, raf);
+  } else if (ext === '.cr3') {
+    const cr3 = await extractCr3Metadata(filePath);
+    if (cr3) return await fillDateFromMtime(filePath, cr3);
   } else if (ISOBMFF_VIDEO_EXTS.has(ext)) {
     const video = await extractIsobmffMetadata(filePath);
     if (video) return await fillDateFromMtime(filePath, video);
@@ -234,6 +237,59 @@ async function extractIsobmffMetadata(filePath: string): Promise<MetadataResult 
     if (model || captureDate) return { captureDate, camera: cleanCameraName(model) };
     if (udta) return await readClassicUdta(fh, udta);
     return null;
+  } catch {
+    return null;
+  } finally {
+    await fh?.close();
+  }
+}
+
+// Canon CR3 (ISOBMFF RAW): EXIF IFD0 lives in a Canon `uuid` box inside `moov`,
+// as a `CMT1` atom holding a standard TIFF block. ExifReader can't locate it from
+// a truncated buffer, so descend the boxes and feed just CMT1 to it.
+async function extractCr3Metadata(filePath: string): Promise<MetadataResult | null> {
+  let fh: fs.promises.FileHandle | undefined;
+  try {
+    fh = await fs.promises.open(filePath, 'r');
+    const { size: fileSize } = await fh.stat();
+
+    const moov = await findAtom(fh, 'moov', 0, fileSize);
+    if (!moov) return null;
+
+    // Scan moov children for `uuid` boxes; the Canon metadata uuid contains CMT1.
+    const header = Buffer.alloc(16);
+    let pos = moov.dataStart;
+    let cmt1: AtomLocation | null = null;
+    while (pos + 8 <= moov.dataEnd) {
+      const { bytesRead } = await fh.read(header, 0, 16, pos);
+      if (bytesRead < 8) break;
+      let size = header.readUInt32BE(0);
+      const type = header.toString('latin1', 4, 8);
+      if (size === 0) size = moov.dataEnd - pos;
+      if (size < 8) break;
+      if (type === 'uuid') {
+        // Skip the 16-byte UUID, then look for CMT1 among the nested atoms.
+        cmt1 = await findAtom(fh, 'CMT1', pos + 8 + 16, pos + size);
+        if (cmt1) break;
+      }
+      pos += size;
+    }
+    if (!cmt1) return null;
+
+    const tiff = await readRange(fh, cmt1.dataStart, cmt1.dataEnd);
+    const tags = ExifReader.load(tiff, { expanded: true, excludeXmp: true });
+    const dateStr =
+      tags.exif?.DateTimeOriginal?.description ??
+      tags.exif?.DateTime?.description;
+    const camera = cleanCameraName(tags.exif?.Model?.description);
+    let captureDate: string | undefined;
+    if (dateStr) {
+      const iso = dateStr.replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3');
+      const d = new Date(iso);
+      if (!isNaN(d.getTime())) captureDate = d.toISOString();
+    }
+    if (!camera && !captureDate) return null;
+    return { captureDate, camera };
   } catch {
     return null;
   } finally {

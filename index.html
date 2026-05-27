@@ -118,6 +118,22 @@
             </div>
           </div>
 
+          <!-- Folder naming Card -->
+          <div class="border border-neutral-700 rounded-lg overflow-hidden">
+            <button class="settings-card-header w-full flex items-center gap-3 px-3 py-2.5 hover:bg-neutral-800/50 transition-colors" data-card="naming">
+              <div class="flex-1 text-left">
+                <div class="text-xs font-medium text-neutral-300">Folder naming</div>
+                <div id="card-naming-summary" class="text-[10px] text-neutral-500">YYYY.MM.DD</div>
+              </div>
+              <span class="w-2 h-2 rounded-full bg-neutral-600 shrink-0"></span>
+            </button>
+            <div id="card-naming-detail" class="hidden px-3 pb-3 pt-2 border-t border-neutral-700/50">
+              <p class="text-[10px] text-neutral-500 mb-2">Date format for generated folder names. Tokens: <code>YYYY</code>, <code>YY</code>, <code>MM</code>, <code>DD</code>.</p>
+              <input id="cfg-date-format" type="text" placeholder="YYYY.MM.DD" class="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500" />
+              <div class="text-[10px] text-neutral-500 mt-1">Preview: <span id="cfg-date-preview" class="text-neutral-300"></span></div>
+            </div>
+          </div>
+
           <button id="cfg-save" class="mt-3 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded-md text-xs font-medium transition-colors w-full">Save & close</button>
         </div>
       </div>
@@ -206,18 +222,20 @@
             <input id="new-folder-name" type="text" class="flex-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500" />
           </label>
 
-          <label class="flex items-center gap-2 cursor-pointer">
-            <input type="radio" name="xfer-mode" value="existing" class="accent-blue-500" />
-            <span class="text-xs">Existing folder(s):</span>
-          </label>
-          <div id="existing-folders" class="hidden pl-6 py-1 flex flex-wrap gap-1 max-h-28 overflow-auto"></div>
-
-          <label id="grouped-option" class="flex items-center gap-2 cursor-pointer">
-            <input type="radio" name="xfer-mode" value="grouped" class="accent-blue-500" />
-            <span class="text-xs">Group by date:</span>
-            <input id="topic" type="text" placeholder="topic" class="flex-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500" />
+          <label id="group-by-date-option" class="hidden items-center gap-2 cursor-pointer pl-6">
+            <input type="checkbox" id="group-by-date" class="accent-blue-500 scale-90" />
+            <span class="text-xs text-neutral-400">Separate folder per date</span>
+            <input id="topic" type="text" placeholder="topic" class="hidden flex-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500" />
           </label>
           <div id="date-groups-preview" class="hidden pl-6 py-1 flex flex-col gap-1 text-xs"></div>
+
+          <label class="flex items-center gap-2 cursor-pointer pt-2">
+            <input type="radio" name="xfer-mode" value="existing" class="accent-blue-500" />
+            <span class="text-xs whitespace-nowrap">Existing folder:</span>
+            <select id="existing-all-select" class="all-folder-select flex-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-neutral-300 focus:outline-none focus:border-blue-500"></select>
+            <input id="existing-all-new" type="text" placeholder="folder name" class="all-new-folder-input hidden flex-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-neutral-300 focus:outline-none focus:border-blue-500" />
+          </label>
+          <div id="existing-folders" class="hidden pl-6 py-1 flex flex-col gap-1 max-h-40 overflow-auto"></div>
 
           <label id="camera-subfolder-option" class="flex items-center gap-1.5 cursor-pointer hidden pt-1">
             <input type="checkbox" id="camera-subfolder" class="accent-blue-500 scale-90" />

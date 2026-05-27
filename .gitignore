@@ -99,3 +99,6 @@ out/
 
 # Stale Vite dist output (Electron build goes to out/)
 /dist/
+
+# Dev test SD fixture (generate via npm run make-test-sd)
+dev-fixtures/

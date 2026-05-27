@@ -13,6 +13,7 @@ interface AppSettings {
   synologyPass?: string;
   synologySecure?: boolean;
   synologyFolders?: string;
+  dateFormat?: string;
 }
 
 const storePath = path.join(app.getPath('userData'), 'settings.json');
