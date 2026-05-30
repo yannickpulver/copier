@@ -2,6 +2,8 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 contextBridge.exposeInMainWorld('api', {
   listSdCards: () => ipcRenderer.invoke('list-sd-cards'),
+  ejectSdCard: (mountPath: string) =>
+    ipcRenderer.invoke('eject-sd-card', mountPath) as Promise<{ ok: boolean; error?: string }>,
   loadSynologyConfig: () => ipcRenderer.invoke('load-synology-config'),
   checkSourcesStatus: () => ipcRenderer.invoke('check-sources-status'),
   onSourcesList: (cb: (sources: { name: string; type: string }[]) => void) => {

@@ -14,6 +14,7 @@ declare global {
       onSourcesList: (cb: (sources: { name: string; type: string }[]) => void) => () => void;
       onSourceStatus: (cb: (data: { index: number; available: boolean }) => void) => () => void;
       cancelScan: () => Promise<void>;
+      ejectSdCard: (mountPath: string) => Promise<{ ok: boolean; error?: string }>;
       scan: (sdPath: string, skipCheck?: boolean, disabledSources?: string[]) => Promise<{
         aborted?: boolean;
         total: number;
@@ -95,6 +96,7 @@ const progressBar = $<HTMLDivElement>('#progress-bar');
 const progressLabel = $('#progress-label');
 const allBackedUp = $('#all-backed-up');
 const backedUpMsg = $('#backed-up-msg');
+const ejectBtn = $<HTMLButtonElement>('#eject-btn');
 const fileTable = $('#file-table');
 const otherSection = $('#other-section');
 const otherLabel = $('#other-label');
@@ -607,6 +609,28 @@ async function runScan(skipCheck: boolean, sdPathOverride?: string) {
     if (media.length === 0) {
       allBackedUp.classList.remove('hidden');
       backedUpMsg.textContent = `All ${result.backedUp} files backed up`;
+
+      // Offer to eject real (mounted) cards once everything is safely backed up.
+      if (sdPath.startsWith('/Volumes/')) {
+        ejectBtn.classList.remove('hidden');
+        ejectBtn.disabled = false;
+        ejectBtn.textContent = '⏏ Eject card';
+        ejectBtn.onclick = async () => {
+          ejectBtn.disabled = true;
+          ejectBtn.textContent = 'Ejecting…';
+          const res = await window.api.ejectSdCard(sdPath);
+          if (res.ok) {
+            ejectBtn.textContent = '✓ Ejected';
+            refreshSdCards();
+          } else {
+            ejectBtn.disabled = false;
+            ejectBtn.textContent = '⏏ Eject card';
+            status.textContent = `Eject failed: ${res.error ?? 'unknown error'}`;
+          }
+        };
+      } else {
+        ejectBtn.classList.add('hidden');
+      }
 
       const backupFolders = document.getElementById('backup-folders')!;
 

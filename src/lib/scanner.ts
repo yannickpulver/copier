@@ -63,6 +63,39 @@ function checkVolume(ident: string, name: string, mount: string): Promise<SdCard
   });
 }
 
+// Some cameras (e.g. DJI drones) reuse the same filename across different
+// subfolders — PANORAMA/100_0001/DJI_0001.JPG and PANORAMA/100_0002/DJI_0001.JPG.
+// Matching and transfer key off the filename only (folder layout differs between
+// SD and NAS), so without disambiguation the second copy gets renamed on write
+// (DJI_0001_1.JPG) and can never be matched back to its source — it re-copies on
+// every scan. Prefix the source subfolder so each colliding name is unique and
+// stable across scans. fullPath stays untouched (it's the copy source).
+export function disambiguateDuplicateNames(files: FileInfo[]): void {
+  const byName = new Map<string, FileInfo[]>();
+  for (const f of files) {
+    const group = byName.get(f.name);
+    if (group) group.push(f);
+    else byName.set(f.name, [f]);
+  }
+
+  for (const group of byName.values()) {
+    if (group.length < 2) continue;
+    for (const f of group) {
+      const parent = path.basename(path.dirname(f.relPath));
+      if (parent && parent !== '.') f.name = `${parent}_${f.name}`;
+    }
+  }
+}
+
+export function ejectVolume(mountPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile('/usr/sbin/diskutil', ['eject', mountPath], { timeout: 15000 }, (err, _stdout, stderr) => {
+      if (err) { reject(new Error(stderr?.trim() || err.message)); return; }
+      resolve();
+    });
+  });
+}
+
 export async function scanFiles(
   volumePath: string,
   onProgress?: (count: number, folder: string) => void,

@@ -3,7 +3,7 @@ import path from 'node:path';
 import started from 'electron-squirrel-startup';
 import { updateElectronApp } from 'update-electron-app';
 
-import { listSdCards, scanFiles } from './lib/scanner';
+import { listSdCards, scanFiles, ejectVolume, disambiguateDuplicateNames } from './lib/scanner';
 import { indexNas, checkBackedUp, listExistingFolders } from './lib/matcher';
 import type { NasIndex, SourceIndex } from './lib/matcher';
 import { SynologyClient } from './lib/synology';
@@ -62,6 +62,15 @@ ipcMain.handle('list-sd-cards', async () => {
     }
   }
   return cards;
+});
+
+ipcMain.handle('eject-sd-card', async (_event, mountPath: string) => {
+  try {
+    await ejectVolume(mountPath);
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: e?.message ?? String(e) };
+  }
 });
 
 ipcMain.handle('test-synology', async (_event, host: string, port: number, user: string, pass: string, secure: boolean, folders: string) => {
@@ -148,6 +157,9 @@ ipcMain.handle('scan', async (_event, sdPath: string, skipCheck?: boolean, disab
     sendProgress('sd', count, folder);
   }, signal);
   if (signal.aborted) throw new Error('aborted');
+  // Make same-name files from different subfolders (e.g. DJI panoramas) unique
+  // so they match on rescan instead of re-copying every time.
+  disambiguateDuplicateNames(sdFiles);
   sendProgress('sd', sdFiles.length, 'Done');
 
   // Skip backup check — treat all media as new
