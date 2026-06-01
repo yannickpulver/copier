@@ -9,7 +9,7 @@ import type { NasIndex, SourceIndex } from './lib/matcher';
 import { SynologyClient } from './lib/synology';
 import { loadSynologyConfig, resolveOpReference } from './lib/credentials';
 import { enrichMetadata } from './lib/metadata';
-import { copyFiles, copyFilesGroupedByDate } from './lib/transfer';
+import { copyFiles, copyFilesGroupedByDate, checkDiskSpace } from './lib/transfer';
 import { walkFolder, diffFolders, syncFiles } from './lib/sync';
 import type { SynologyConfig, FileInfo } from './lib/types';
 import { getSetting, setSetting } from './lib/store';
@@ -294,6 +294,17 @@ ipcMain.handle('transfer', async (_event, files: FileInfo[], dest: string, mode:
     mainWindow?.webContents.send('transfer-progress', { current, total, name });
   };
   const dateFormat = getSetting('dateFormat') || undefined;
+
+  // Pre-flight: bail out before copying if the destination volume(s) lack space.
+  const spaceTargets = (fileGroups && fileGroups.length > 0)
+    ? fileGroups
+    : [{ dest, files }];
+  const shortfall = await checkDiskSpace(spaceTargets);
+  if (shortfall) {
+    powerSaveBlocker.stop(sleepBlockId);
+    transferAbort = null;
+    return { errors: [], cancelled: false, insufficientSpace: shortfall };
+  }
 
   try {
     // Multi-folder transfer (existing mode with multiple selected folders)

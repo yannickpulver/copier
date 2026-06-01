@@ -25,7 +25,7 @@ declare global {
         sources: { name: string; ok: boolean; error?: string }[];
       }>;
       listExistingFolders: (nasPath: string) => Promise<string[]>;
-      transfer: (files: any[], dest: string, mode: string, topic?: string, cameraSubfolder?: boolean, fileGroups?: {dest: string, files: any[]}[]) => Promise<{ errors: string[]; cancelled: boolean }>;
+      transfer: (files: any[], dest: string, mode: string, topic?: string, cameraSubfolder?: boolean, fileGroups?: {dest: string, files: any[]}[]) => Promise<{ errors: string[]; cancelled: boolean; insufficientSpace?: { requiredBytes: number; freeBytes: number; destPath: string } }>;
       cancelTransfer: () => Promise<void>;
       testSynology: (host: string, port: number, user: string, pass: string, secure: boolean, folders: string) => Promise<{ ok: boolean; error?: string }>;
       describeImage: (filePath: string) => Promise<{ ok: boolean; description?: string; error?: string }>;
@@ -945,7 +945,11 @@ transferBtn.addEventListener('click', async () => {
   try {
     const cameraSubfolder = $<HTMLInputElement>('#camera-subfolder').checked;
     const result = await window.api.transfer(filesToTransfer, dest, mode, topic, cameraSubfolder, fileGroups);
-    if (result.cancelled) {
+    if (result.insufficientSpace) {
+      const { requiredBytes, freeBytes } = result.insufficientSpace;
+      progressLabel.textContent = 'Not enough storage';
+      status.textContent = `Not enough free space at destination — need ${formatSize(requiredBytes)}, only ${formatSize(freeBytes)} available. Nothing was copied.`;
+    } else if (result.cancelled) {
       progressLabel.textContent = 'Cancelled';
       status.textContent = 'Transfer cancelled';
     } else {

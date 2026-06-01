@@ -8,6 +8,49 @@ async function preserveTimestamps(src: string, dest: string): Promise<void> {
   await fs.promises.utimes(dest, stat.atime, stat.mtime);
 }
 
+export interface SpaceShortfall {
+  requiredBytes: number;
+  freeBytes: number;
+  destPath: string;
+}
+
+function existingAncestor(p: string): string {
+  let cur = path.resolve(p);
+  while (!fs.existsSync(cur)) {
+    const parent = path.dirname(cur);
+    if (parent === cur) return cur;
+    cur = parent;
+  }
+  return cur;
+}
+
+/** Pre-flight: verify each destination volume has room for the bytes headed
+ * there. Returns the first shortfall found, or null if everything fits. */
+export async function checkDiskSpace(
+  targets: { dest: string; files: FileInfo[] }[],
+): Promise<SpaceShortfall | null> {
+  const byVolume = new Map<number, { required: number; dest: string; ancestor: string }>();
+
+  for (const t of targets) {
+    const ancestor = existingAncestor(t.dest);
+    const dev = (await fs.promises.stat(ancestor)).dev;
+    const bytes = t.files.reduce((s, f) => s + (f.size || 0), 0);
+    const existing = byVolume.get(dev);
+    if (existing) existing.required += bytes;
+    else byVolume.set(dev, { required: bytes, dest: t.dest, ancestor });
+  }
+
+  for (const v of byVolume.values()) {
+    const stats = await fs.promises.statfs(v.ancestor);
+    const free = stats.bavail * stats.bsize;
+    if (v.required > free) {
+      return { requiredBytes: v.required, freeBytes: free, destPath: v.dest };
+    }
+  }
+
+  return null;
+}
+
 function resolveCollision(filePath: string): string {
   if (!fs.existsSync(filePath)) return filePath;
 
