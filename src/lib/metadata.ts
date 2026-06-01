@@ -154,6 +154,64 @@ async function readRange(
   return buf.subarray(0, bytesRead);
 }
 
+interface IlstResult { model?: string; encoder?: string; dateStr?: string }
+
+// Parse the `ilst` inside an ISOBMFF `meta` box (start/end span its children,
+// after the 4-byte version/flags). Returns the model, encoder (©too) and date.
+async function parseIlst(
+  fh: fs.promises.FileHandle,
+  metaStart: number,
+  metaEnd: number,
+): Promise<IlstResult> {
+  const keys = await findAtom(fh, 'keys', metaStart, metaEnd);
+  const ilst = await findAtom(fh, 'ilst', metaStart, metaEnd);
+  if (!ilst) return {};
+
+  const keyList: string[] = [];
+  if (keys) {
+    const buf = await readRange(fh, keys.dataStart + 4, keys.dataEnd);
+    const count = buf.readUInt32BE(0);
+    let off = 4;
+    for (let i = 0; i < count && off + 8 <= buf.length; i++) {
+      const size = buf.readUInt32BE(off);
+      if (size < 8 || off + size > buf.length) break;
+      keyList.push(buf.toString('utf8', off + 8, off + size));
+      off += size;
+    }
+  }
+
+  const ilstBuf = await readRange(fh, ilst.dataStart, ilst.dataEnd);
+  const result: IlstResult = {};
+  let off = 0;
+  while (off + 8 <= ilstBuf.length) {
+    const size = ilstBuf.readUInt32BE(off);
+    if (size < 8 || off + size > ilstBuf.length) break;
+    const idx = ilstBuf.readUInt32BE(off + 4);
+    const typeAscii = ilstBuf.toString('latin1', off + 4, off + 8);
+    const key = keyList[idx - 1] ?? typeAscii;
+
+    if (off + 16 <= off + size) {
+      const dataSize = ilstBuf.readUInt32BE(off + 8);
+      const dataType = ilstBuf.toString('latin1', off + 12, off + 16);
+      if (dataType === 'data' && dataSize >= 16 && off + 8 + dataSize <= off + size) {
+        const payload = ilstBuf
+          .toString('utf8', off + 24, off + 8 + dataSize)
+          .replace(/\0+$/, '')
+          .trim();
+        if (/(^|\.)model$/i.test(key) || key === '©mod') {
+          result.model ??= payload;
+        } else if (key === '©too') {
+          result.encoder ??= payload;
+        } else if (/(creationdate|date$)/i.test(key) || key === '©day') {
+          result.dateStr ??= payload;
+        }
+      }
+    }
+    off += size;
+  }
+  return result;
+}
+
 async function extractIsobmffMetadata(filePath: string): Promise<MetadataResult | null> {
   let fh: fs.promises.FileHandle | undefined;
   try {
@@ -163,71 +221,31 @@ async function extractIsobmffMetadata(filePath: string): Promise<MetadataResult 
     const moov = await findAtom(fh, 'moov', 0, fileSize);
     if (!moov) return null;
 
-    // Try moov/meta (full box: 4-byte version+flags) and moov/udta/meta
-    let metaStart: number | null = null;
-    let metaEnd: number | null = null;
+    // A file may carry both a (often empty) moov/meta and a moov/udta/meta that
+    // holds the real tags — DJI videos do. Parse every meta we find and merge.
+    const metas: AtomLocation[] = [];
     const meta1 = await findAtom(fh, 'meta', moov.dataStart, moov.dataEnd);
+    if (meta1) metas.push(meta1);
     const udta = await findAtom(fh, 'udta', moov.dataStart, moov.dataEnd);
-    if (meta1) {
-      metaStart = meta1.dataStart + 4;
-      metaEnd = meta1.dataEnd;
-    } else if (udta) {
+    if (udta) {
       const meta2 = await findAtom(fh, 'meta', udta.dataStart, udta.dataEnd);
-      if (meta2) {
-        metaStart = meta2.dataStart + 4;
-        metaEnd = meta2.dataEnd;
-      }
-    }
-    if (metaStart === null || metaEnd === null) {
-      if (udta) return await readClassicUdta(fh, udta);
-      return null;
+      if (meta2) metas.push(meta2);
     }
 
-    const keys = await findAtom(fh, 'keys', metaStart, metaEnd);
-    const ilst = await findAtom(fh, 'ilst', metaStart, metaEnd);
-    if (!ilst) return null;
-
-    const keyList: string[] = [];
-    if (keys) {
-      const buf = await readRange(fh, keys.dataStart + 4, keys.dataEnd);
-      const count = buf.readUInt32BE(0);
-      let off = 4;
-      for (let i = 0; i < count && off + 8 <= buf.length; i++) {
-        const size = buf.readUInt32BE(off);
-        if (size < 8 || off + size > buf.length) break;
-        keyList.push(buf.toString('utf8', off + 8, off + size));
-        off += size;
-      }
-    }
-
-    const ilstBuf = await readRange(fh, ilst.dataStart, ilst.dataEnd);
     let model: string | undefined;
+    let encoder: string | undefined;
     let dateStr: string | undefined;
-    let off = 0;
-    while (off + 8 <= ilstBuf.length) {
-      const size = ilstBuf.readUInt32BE(off);
-      if (size < 8 || off + size > ilstBuf.length) break;
-      const idx = ilstBuf.readUInt32BE(off + 4);
-      const typeAscii = ilstBuf.toString('latin1', off + 4, off + 8);
-      const key = keyList[idx - 1] ?? typeAscii;
-
-      if (off + 16 <= off + size) {
-        const dataSize = ilstBuf.readUInt32BE(off + 8);
-        const dataType = ilstBuf.toString('latin1', off + 12, off + 16);
-        if (dataType === 'data' && dataSize >= 16 && off + 8 + dataSize <= off + size) {
-          const payload = ilstBuf
-            .toString('utf8', off + 24, off + 8 + dataSize)
-            .replace(/\0+$/, '')
-            .trim();
-          if (/(^|\.)model$/i.test(key) || key === '©mod') {
-            model = payload;
-          } else if (/(creationdate|date$)/i.test(key) || key === '©day') {
-            dateStr ??= payload;
-          }
-        }
-      }
-      off += size;
+    for (const meta of metas) {
+      // meta is a full box: skip the 4-byte version/flags before its children.
+      const parsed = await parseIlst(fh, meta.dataStart + 4, meta.dataEnd);
+      model ??= parsed.model;
+      encoder ??= parsed.encoder;
+      dateStr ??= parsed.dateStr;
     }
+
+    // DJI stores the drone model in the iTunes-style `©too` (encoder) tag,
+    // e.g. "DJI Mavic3Pro" — there is no Model/©mod key in the video.
+    if (!model && encoder && /^DJI\b/i.test(encoder)) model = encoder;
 
     let captureDate: string | undefined;
     if (dateStr) {
@@ -414,7 +432,19 @@ function cleanCameraName(raw: string | undefined): string | undefined {
   if (!raw) return undefined;
   const first = raw.split(',')[0].trim();
   if (!first) return undefined;
-  return DJI_MODEL_MAP[first] ?? first;
+  if (DJI_MODEL_MAP[first]) return DJI_MODEL_MAP[first];
+  // DJI videos report compact model names ("DJI Mavic3Pro", "DJI Air3S").
+  // Normalize spacing so they merge with the EXIF-derived photo folder.
+  const dji = first.match(/^DJI\s+(.+)$/i);
+  if (dji) {
+    const spaced = dji[1]
+      .replace(/([a-z])([0-9])/gi, '$1 $2')
+      .replace(/([0-9])([A-Z][a-z])/g, '$1 $2')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return `DJI ${spaced}`;
+  }
+  return first;
 }
 
 async function extractRafMetadata(filePath: string): Promise<MetadataResult | null> {

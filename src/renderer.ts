@@ -104,6 +104,7 @@ const otherList = $<HTMLTableSectionElement>('#other-list');
 
 let sdCards: { name: string; path: string }[] = [];
 let transferInProgress = false;
+let scanInProgress = false;
 let missingFiles: any[] = [];
 let scanGeneration = 0;
 const mergedDays = new Set<string>();
@@ -350,22 +351,43 @@ async function refreshSdCards() {
   const oldPaths = sdCards.map((c) => c.path).join(',');
 
   if (paths !== oldPaths) {
+    const oldSet = new Set(sdCards.map((c) => c.path));
     sdCards = cards;
     const prev = sdSelect.value;
     sdSelect.innerHTML = cards.length
       ? cards.map((c) => `<option value="${c.path}">${c.name} (${c.path})</option>`).join('')
       : '<option value="">No SD card detected</option>';
 
-    if (cards.find((c) => c.path === prev)) {
+    const newCard = cards.find((c) => !oldSet.has(c.path));
+    if (newCard && isIdleSdState()) {
+      // Freshly inserted card while idle (initial) or done — switch to it.
+      window.api.cancelScan();
+      sdSelect.value = newCard.path;
+      resetResults();
+    } else if (cards.find((c) => c.path === prev)) {
       sdSelect.value = prev;
     } else {
-      // SD card changed — cancel in-flight scan and reset
+      // Selected card removed — cancel in-flight scan and reset
       window.api.cancelScan();
       resetResults();
     }
     scanBtn.disabled = cards.length === 0;
     instantTransferBtn.disabled = cards.length === 0;
   }
+}
+
+// True only when no work is pending: app just started / was reset (initial),
+// or a scan finished with everything already backed up (done). Excludes the
+// scanning, pending-transfer, and copying states so we never yank the selector
+// out from under an in-progress workflow.
+function isIdleSdState(): boolean {
+  if (transferInProgress || scanInProgress) return false;
+  const doneState = !allBackedUp.classList.contains('hidden');
+  const initialState =
+    allBackedUp.classList.contains('hidden') &&
+    fileTable.classList.contains('hidden') &&
+    transferSection.classList.contains('hidden');
+  return doneState || initialState;
 }
 
 browseDestBtn.addEventListener('click', async () => {
@@ -565,6 +587,7 @@ async function runScan(skipCheck: boolean, sdPathOverride?: string) {
   scanGeneration++;
   const gen = scanGeneration;
 
+  scanInProgress = true;
   scanBtn.disabled = true;
   instantTransferBtn.disabled = true;
   status.textContent = skipCheck ? 'Scanning files...' : 'Starting scan...';
@@ -813,6 +836,7 @@ async function runScan(skipCheck: boolean, sdPathOverride?: string) {
       status.textContent = `Error: ${e.message}`;
     }
   } finally {
+    if (gen === scanGeneration) scanInProgress = false;
     scanBtn.disabled = false;
     instantTransferBtn.disabled = false;
   }
