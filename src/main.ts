@@ -138,6 +138,18 @@ ipcMain.handle('check-sources-status', async () => {
   }));
 });
 
+// Reject as soon as the scan is cancelled, even if `p` is still pending
+// (e.g. waiting on an unresponsive Synology login). The underlying work is
+// left to settle/time out on its own; we just stop waiting for it.
+function abortable<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(new Error('aborted'));
+    const onAbort = () => reject(new Error('aborted'));
+    signal.addEventListener('abort', onAbort, { once: true });
+    p.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
+}
+
 let scanAbort: AbortController | null = null;
 
 ipcMain.handle('cancel-scan', () => {
@@ -193,7 +205,7 @@ ipcMain.handle('scan', async (_event, sdPath: string, skipCheck?: boolean, disab
       try {
         sendProgress('source', 0, 'Synology API: connecting...');
         const client = new SynologyClient(synoConfig);
-        await client.login();
+        await client.login(4000);
         const targetKeys = new Set(sdFiles.map((f) => `${f.name}|${f.size}`));
         const index = await client.indexFiles(synoConfig.folders, targetKeys, (count, folder) => {
           sendProgress('source', count, `API: ${folder}`);
@@ -208,7 +220,7 @@ ipcMain.handle('scan', async (_event, sdPath: string, skipCheck?: boolean, disab
   }
 
   // Wait for API to finish first so we know if fallbacks are needed
-  const apiResults = await Promise.all(sources);
+  const apiResults = await abortable(Promise.all(sources), signal);
   apiOk = apiResults.some((r) => r.ok && r.name === 'Synology API');
   sources.length = 0;
 
@@ -241,10 +253,12 @@ ipcMain.handle('scan', async (_event, sdPath: string, skipCheck?: boolean, disab
     })());
   }
 
-  const localResults = await Promise.all(sources);
+  const localResults = await abortable(Promise.all(sources), signal);
   const allResults = [...apiResults, ...localResults];
 
-  if (allResults.length === 0) {
+  // Only an error if nothing is configured at all. If sources exist but were
+  // all excluded (offline/disabled), proceed — every file is treated as new.
+  if (!synoConfig && checkPaths.length === 0) {
     throw new Error('No check sources configured. Open settings to add NAS or local paths.');
   }
 

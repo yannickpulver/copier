@@ -10,10 +10,10 @@
       <!-- Drag region + tabs + settings toggle -->
       <div class="shrink-0 flex items-center justify-end px-4 pt-8 pb-1 gap-2" style="-webkit-app-region: drag">
         <div class="flex gap-1 bg-neutral-800 rounded-md p-0.5 border border-neutral-700" style="-webkit-app-region: no-drag">
-          <button data-tab="backup" class="tab-btn px-2.5 py-1 text-[11px] rounded transition-colors bg-neutral-700 text-neutral-200">SD Backup</button>
-          <button data-tab="sync" class="tab-btn px-2.5 py-1 text-[11px] rounded transition-colors text-neutral-500 hover:text-neutral-300">Folder Sync</button>
+          <button data-tab="backup" class="tab-btn px-2.5 py-1 text-[11px] rounded transition-colors bg-neutral-700 text-neutral-200">💾 SD Backup</button>
+          <button data-tab="sync" class="tab-btn px-2.5 py-1 text-[11px] rounded transition-colors text-neutral-500 hover:text-neutral-300">🔄 Folder Sync</button>
+          <button data-tab="settings" class="tab-btn px-2.5 py-1 text-[11px] rounded transition-colors text-neutral-500 hover:text-neutral-300">⚙ Settings</button>
         </div>
-        <button id="settings-toggle" class="flex items-center gap-1.5 text-neutral-400 hover:text-neutral-200 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-[11px] px-2.5 py-1 rounded-md transition-colors self-stretch" style="-webkit-app-region: no-drag" title="Settings">⚙ Settings</button>
       </div>
 
       <!-- Settings panel -->
@@ -160,6 +160,9 @@
             <button id="scan-btn" disabled class="shrink-0 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-neutral-700 disabled:text-neutral-500 rounded-md text-xs font-medium transition-colors">
               Scan for duplicates
             </button>
+            <button id="scan-cancel-btn" class="hidden shrink-0 px-3 py-1.5 bg-red-600/80 hover:bg-red-500 rounded-md text-xs font-medium transition-colors">
+              Cancel
+            </button>
             <span class="shrink-0 text-neutral-500 text-xs">or</span>
             <button id="instant-transfer-btn" disabled class="min-w-0 px-3 py-1.5 bg-neutral-700 hover:bg-neutral-600 disabled:bg-neutral-800 disabled:text-neutral-600 border border-neutral-600 rounded-md text-xs font-medium transition-colors text-neutral-300 truncate">
               Fast mode <span class="text-neutral-500 font-normal">(metadata only, no duplicates)</span>
@@ -178,7 +181,7 @@
 
         <!-- Missing media files grouped by day -->
         <div id="file-table" class="hidden space-y-1">
-          <div class="text-[10px] uppercase tracking-wider text-neutral-500">Found date groups</div>
+          <div class="text-[10px] uppercase tracking-wider text-neutral-500">New files</div>
           <div id="file-list" class="space-y-1"></div>
         </div>
 
@@ -210,33 +213,49 @@
 
         <!-- Transfer section -->
         <div id="transfer-section" class="hidden border border-neutral-700 rounded-md px-3 pb-3 pt-4 space-y-2">
+          <div class="text-[10px] uppercase tracking-wider text-neutral-500 mb-1">Transfer to</div>
           <div class="flex items-center gap-2 mb-2">
-            <span class="text-xs font-medium text-neutral-400">Transfer to</span>
             <select id="transfer-dest" class="flex-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500">
             </select>
             <button id="browse-dest-btn" class="px-2 py-1 bg-neutral-700 hover:bg-neutral-600 rounded text-xs transition-colors shrink-0" title="Add destination">+</button>
           </div>
 
-          <label class="flex items-center gap-2 cursor-pointer">
-            <input type="radio" name="xfer-mode" value="new" checked class="accent-blue-500" />
-            <span class="text-xs">New folder:</span>
-            <input id="new-folder-name" type="text" class="flex-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500" />
-          </label>
+          <!-- Folder mode toggle (full width) -->
+          <div class="text-[10px] uppercase tracking-wider text-neutral-500 mb-1">Folder</div>
+          <div class="flex w-full gap-1 bg-neutral-800 rounded-md p-0.5 border border-neutral-700">
+            <button type="button" data-mode="new" class="xfer-mode-btn flex-1 px-2.5 py-1 text-xs rounded transition-colors bg-neutral-700 text-neutral-200">New folder</button>
+            <button type="button" data-mode="existing" class="xfer-mode-btn flex-1 px-2.5 py-1 text-xs rounded transition-colors text-neutral-500 hover:text-neutral-300">Existing folder</button>
+          </div>
 
-          <label id="group-by-date-option" class="hidden items-center gap-2 cursor-pointer pl-6">
-            <input type="checkbox" id="group-by-date" class="accent-blue-500 scale-90" />
-            <span class="text-xs text-neutral-400">Separate folder per date</span>
-            <input id="topic" type="text" placeholder="topic" class="hidden flex-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500" />
-          </label>
-          <div id="date-groups-preview" class="hidden pl-6 py-1 flex flex-col gap-1 text-xs"></div>
+          <!-- Single folder vs separate-per-date toggle (New folder mode, multi-date) -->
+          <div id="group-by-date-option" class="hidden space-y-1">
+            <div class="text-[10px] uppercase tracking-wider text-neutral-500 mb-1">Grouping</div>
+            <div class="flex w-full gap-1 bg-neutral-800 rounded-md p-0.5 border border-neutral-700">
+              <button type="button" data-group="single" class="group-by-btn flex-1 px-2.5 py-1 text-xs rounded transition-colors bg-neutral-700 text-neutral-200">Single folder</button>
+              <button type="button" data-group="date" class="group-by-btn flex-1 px-2.5 py-1 text-xs rounded transition-colors text-neutral-500 hover:text-neutral-300">Folder per date</button>
+            </div>
+          </div>
+          <input type="checkbox" id="group-by-date" class="hidden" />
+          <input id="topic" type="text" placeholder="topic" class="hidden flex-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500" />
 
-          <label class="flex items-center gap-2 cursor-pointer pt-2">
-            <input type="radio" name="xfer-mode" value="existing" class="accent-blue-500" />
-            <span class="text-xs whitespace-nowrap">Existing folder:</span>
+          <!-- New folder field (single-folder sub-mode) -->
+          <div id="new-folder-row" class="space-y-1">
+            <div class="text-[10px] uppercase tracking-wider text-neutral-500">Folder name</div>
+            <input id="new-folder-name" type="text" placeholder="folder name" class="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500" />
+          </div>
+
+          <!-- Per-date folders (folder-per-date sub-mode) -->
+          <div id="date-groups-section" class="hidden space-y-1">
+            <div class="text-[10px] uppercase tracking-wider text-neutral-500">Folder name</div>
+            <div id="date-groups-preview" class="py-1 flex flex-col gap-1 text-xs"></div>
+          </div>
+
+          <!-- Existing folder field -->
+          <div id="existing-folder-row" class="hidden flex items-center gap-2">
             <select id="existing-all-select" class="all-folder-select flex-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-neutral-300 focus:outline-none focus:border-blue-500"></select>
             <input id="existing-all-new" type="text" placeholder="folder name" class="all-new-folder-input hidden flex-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-neutral-300 focus:outline-none focus:border-blue-500" />
-          </label>
-          <div id="existing-folders" class="hidden pl-6 py-1 flex flex-col gap-1 max-h-40 overflow-auto"></div>
+          </div>
+          <div id="existing-folders" class="hidden flex flex-col gap-1 max-h-40 overflow-auto"></div>
 
           <label id="camera-subfolder-option" class="flex items-center gap-1.5 cursor-pointer hidden pt-1">
             <input type="checkbox" id="camera-subfolder" class="accent-blue-500 scale-90" />
@@ -251,7 +270,7 @@
             <button id="cancel-transfer-btn" class="hidden px-3 py-1.5 bg-red-600/80 hover:bg-red-500 rounded-md text-xs font-medium transition-colors">
               Cancel
             </button>
-            <div class="flex-1 bg-neutral-800 rounded-full h-2 overflow-hidden">
+            <div id="progress-track" class="hidden flex-1 bg-neutral-800 rounded-full h-2 overflow-hidden">
               <div id="progress-bar" class="bg-green-500 h-full transition-all duration-200" style="width: 0%"></div>
             </div>
             <span id="progress-label" class="text-neutral-400 text-xs w-16 text-right"></span>

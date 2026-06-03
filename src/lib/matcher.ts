@@ -145,11 +145,17 @@ export function mergeIndexes(...indexes: NasIndex[]): NasIndex {
   return merged;
 }
 
+// System / recycle-bin folders that should never appear as a destination.
+const IGNORED_FOLDERS = new Set(
+  ['$RECYCLE.BIN', 'System Volume Information', '#recycle', '@eaDir', '.Trashes', 'found.000']
+    .map((n) => n.toLowerCase()),
+);
+
 export function listExistingFolders(nasPath: string): string[] {
   try {
     const entries = fs.readdirSync(nasPath, { withFileTypes: true });
     return entries
-      .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+      .filter((e) => e.isDirectory() && !e.name.startsWith('.') && !IGNORED_FOLDERS.has(e.name.toLowerCase()))
       .map((e) => e.name)
       .sort();
   } catch {

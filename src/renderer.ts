@@ -58,6 +58,7 @@ const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel)
 const sdSelect = $<HTMLSelectElement>('#sd-select');
 const sourcesStatus = $('#sources-status');
 const scanBtn = $<HTMLButtonElement>('#scan-btn');
+const scanCancelBtn = $<HTMLButtonElement>('#scan-cancel-btn');
 const instantTransferBtn = $<HTMLButtonElement>('#instant-transfer-btn');
 const status = $('#status');
 const fileList = $<HTMLDivElement>('#file-list');
@@ -68,31 +69,62 @@ const existingAllSelect = $<HTMLSelectElement>('#existing-all-select');
 const existingAllNew = $<HTMLInputElement>('#existing-all-new');
 const topicInput = $<HTMLInputElement>('#topic');
 const dateGroupsPreview = $('#date-groups-preview');
+const dateGroupsSection = $('#date-groups-section');
 const groupByDateCb = $<HTMLInputElement>('#group-by-date');
 const groupByDateOption = $('#group-by-date-option');
 
 /** Resolve UI controls to an internal transfer mode. "New folder" + the
  *  "Separate folder per date" checkbox maps to the grouped (per-date) mode. */
+const xferModeBtns = document.querySelectorAll<HTMLButtonElement>('.xfer-mode-btn');
+const newFolderRow = $<HTMLDivElement>('#new-folder-row');
+const existingFolderRow = $<HTMLDivElement>('#existing-folder-row');
+let xferModeValue: 'new' | 'existing' = 'new';
+
+function setXferMode(mode: 'new' | 'existing') {
+  xferModeValue = mode;
+  xferModeBtns.forEach((b) => {
+    const active = b.dataset.mode === mode;
+    b.classList.toggle('bg-neutral-700', active);
+    b.classList.toggle('text-neutral-200', active);
+    b.classList.toggle('text-neutral-500', !active);
+  });
+  updateModeVisibility();
+}
+
 function currentMode(): 'new' | 'existing' | 'grouped' {
-  const radio = document.querySelector<HTMLInputElement>('input[name="xfer-mode"]:checked')?.value ?? 'new';
-  if (radio === 'new' && groupByDateCb.checked) return 'grouped';
-  return radio as 'new' | 'existing';
+  if (xferModeValue === 'new' && groupByDateCb.checked) return 'grouped';
+  return xferModeValue;
 }
 
 /** Show the correct sub-sections for the current mode. */
 function updateModeVisibility() {
-  const radio = document.querySelector<HTMLInputElement>('input[name="xfer-mode"]:checked')?.value ?? 'new';
   const mode = currentMode();
-  newFolderInput.disabled = mode === 'grouped';
-  dateGroupsPreview.classList.toggle('hidden', mode !== 'grouped');
-  existingSelect.classList.toggle('hidden', mode !== 'existing');
-  // The per-date checkbox only applies to "New folder".
-  groupByDateOption.classList.toggle('hidden', radio !== 'new' || !groupByDateOption.dataset.available);
+  // New folder: folder-name field for "single folder", per-date chips for "folder per date".
+  newFolderRow.classList.toggle('hidden', mode !== 'new');
+  dateGroupsSection.classList.toggle('hidden', mode !== 'grouped');
+  // Existing folder: dropdown + per-date mapping.
+  existingFolderRow.classList.toggle('hidden', xferModeValue !== 'existing');
+  existingSelect.classList.toggle('hidden', xferModeValue !== 'existing');
+  // The single/per-date toggle only applies to "New folder" (and needs >1 date).
+  groupByDateOption.classList.toggle('hidden', xferModeValue !== 'new' || !groupByDateOption.dataset.available);
+  syncGroupByButtons();
+}
+
+const groupByBtns = document.querySelectorAll<HTMLButtonElement>('.group-by-btn');
+function syncGroupByButtons() {
+  const perDate = groupByDateCb.checked;
+  groupByBtns.forEach((b) => {
+    const active = (b.dataset.group === 'date') === perDate;
+    b.classList.toggle('bg-neutral-700', active);
+    b.classList.toggle('text-neutral-200', active);
+    b.classList.toggle('text-neutral-500', !active);
+  });
 }
 const transferDest = $<HTMLSelectElement>('#transfer-dest');
 const browseDestBtn = $('#browse-dest-btn');
 const transferBtn = $<HTMLButtonElement>('#transfer-btn');
 const progressBar = $<HTMLDivElement>('#progress-bar');
+const progressTrack = $<HTMLDivElement>('#progress-track');
 const progressLabel = $('#progress-label');
 const allBackedUp = $('#all-backed-up');
 const backedUpMsg = $('#backed-up-msg');
@@ -234,6 +266,9 @@ function sessionDatePrefix(key: string): string {
 const spinner = '<span class="inline-block w-2.5 h-2.5 border border-neutral-500 border-t-transparent rounded-full animate-spin shrink-0"></span>';
 
 const disabledSources = new Set<string>();
+// Sources the last status check found offline — auto-excluded from scans so we
+// don't wait out the connection timeout on a NAS that's known to be unreachable.
+const offlineSources = new Set<string>();
 let currentSources: { name: string; type: string }[] = [];
 
 function applyPillDisabledStyle(pill: HTMLElement, disabled: boolean) {
@@ -286,6 +321,11 @@ window.api.onSourcesList((sources) => {
 
 window.api.onSourceStatus(({ index, available }) => {
   resolveSourcePill(index, available);
+  const name = currentSources[index]?.name;
+  if (name) {
+    if (available) offlineSources.delete(name);
+    else offlineSources.add(name);
+  }
 });
 
 function normalizeCheckPaths(raw: any): { path: string; fallbackOnly?: boolean }[] {
@@ -436,11 +476,12 @@ function renderSessionFolderMappings(files: any[], existingFolders: string[]) {
   lastExistingFolders = existingFolders;
   const sessions = sessionsFor(files);
   const reversedFolders = [...existingFolders].reverse();
-  const baseOptions = [
-    '<option value="">— skip —</option>',
-    '<option value="__new__">+ New folder</option>',
-    ...reversedFolders.map((f) => `<option value="${escapeHtml(f)}">${escapeHtml(f)}</option>`),
-  ].join('');
+  const folderOptions = reversedFolders
+    .map((f) => `<option value="${escapeHtml(f)}">${escapeHtml(f)}</option>`)
+    .join('');
+  // Per-date rows keep a "skip" so individual dates can be excluded; neither
+  // dropdown offers "+ New folder" — new folders are created via the toggle.
+  const baseOptions = `<option value="">— skip —</option>${folderOptions}`;
 
   const sessionEntries = [...sessions.entries()].sort(([a], [b]) => a.localeCompare(b));
   const multi = sessionEntries.length > 1;
@@ -468,7 +509,8 @@ function renderSessionFolderMappings(files: any[], existingFolders: string[]) {
   const singleMatch = !multi && sessionEntries.length
     ? reversedFolders.find((f) => f.startsWith(sessionEntries[0][0].split('#')[0].replace(/-/g, '.'))) ?? ''
     : '';
-  const singleOpts = baseOptions.replace(
+  // Single existing-folder dropdown lists only real folders (no skip).
+  const singleOpts = folderOptions.replace(
     `value="${escapeHtml(singleMatch)}"`,
     `value="${escapeHtml(singleMatch)}" selected`,
   );
@@ -590,6 +632,7 @@ async function runScan(skipCheck: boolean, sdPathOverride?: string) {
   scanInProgress = true;
   scanBtn.disabled = true;
   instantTransferBtn.disabled = true;
+  scanCancelBtn.classList.remove('hidden');
   status.textContent = skipCheck ? 'Scanning files...' : 'Starting scan...';
   fileList.innerHTML = '';
   otherList.innerHTML = '';
@@ -602,7 +645,8 @@ async function runScan(skipCheck: boolean, sdPathOverride?: string) {
   mergedDays.clear();
 
   try {
-    const result = await window.api.scan(sdPath, skipCheck, [...disabledSources]);
+    const excluded = new Set([...disabledSources, ...offlineSources]);
+    const result = await window.api.scan(sdPath, skipCheck, [...excluded]);
     if (gen !== scanGeneration) return;
     if (result.aborted) {
       status.textContent = '';
@@ -732,6 +776,9 @@ async function runScan(skipCheck: boolean, sdPathOverride?: string) {
 
     if (media.length > 0) {
       transferSection.classList.remove('hidden');
+      progressTrack.classList.add('hidden');
+      progressLabel.textContent = '';
+      newFolderInput.value = defaultNewFolderName(media);
       updateTransferButtonCount();
 
       // Build session groups preview
@@ -762,9 +809,19 @@ async function runScan(skipCheck: boolean, sdPathOverride?: string) {
       // Determine transfer mode suggestion
       const hasMapping = [...existingSelect.querySelectorAll<HTMLSelectElement>('.date-folder-select')]
         .some((s) => s.value !== '');
+      // Files already backed up into an existing folder → suggest adding there.
+      const predictedFolder = predictExistingFolder(result.suggestedFolders, lastExistingFolders);
       let suggestedMode: string;
       if (hasMapping) {
         suggestedMode = 'existing';
+      } else if (predictedFolder) {
+        suggestedMode = 'existing';
+        existingAllSelect.value = predictedFolder;
+        existingAllNew.classList.add('hidden');
+        // Re-check the camera-subfolder option for the predicted folder (e.g.
+        // detect Scotland/DJI and restore the DJI subfolder on transfer).
+        void autoCheckCameraSubfolder();
+        status.textContent = `Adding to existing folder "${predictedFolder}"`;
       } else {
         const suggestion = suggestTransferMode(media);
         suggestedMode = suggestion.mode;
@@ -775,12 +832,9 @@ async function runScan(skipCheck: boolean, sdPathOverride?: string) {
       // If grouped suggested but only one date, fall back to new
       if (suggestedMode === 'grouped' && sessionsCount < 2) suggestedMode = 'new';
 
-      // Apply suggestion: grouped = "New folder" radio + per-date checkbox on.
-      const radioVal = suggestedMode === 'grouped' ? 'new' : suggestedMode;
-      const radio = document.querySelector<HTMLInputElement>(`input[name="xfer-mode"][value="${radioVal}"]`);
-      if (radio) radio.checked = true;
+      // Apply suggestion: grouped = "New folder" toggle + per-date checkbox on.
       groupByDateCb.checked = suggestedMode === 'grouped';
-      updateModeVisibility();
+      setXferMode(suggestedMode === 'existing' ? 'existing' : 'new');
 
       // Multiple dates already matching existing folders → switch on per-date mode
       // so each maps to its own folder instead of defaulting to a single one.
@@ -839,11 +893,16 @@ async function runScan(skipCheck: boolean, sdPathOverride?: string) {
     if (gen === scanGeneration) scanInProgress = false;
     scanBtn.disabled = false;
     instantTransferBtn.disabled = false;
+    scanCancelBtn.classList.add('hidden');
   }
 }
 
 scanBtn.addEventListener('click', () => runScan(false));
 instantTransferBtn.addEventListener('click', () => runScan(true));
+scanCancelBtn.addEventListener('click', () => {
+  window.api.cancelScan();
+  status.textContent = 'Cancelling...';
+});
 
 sdSelect.addEventListener('change', () => {
   window.api.cancelScan();
@@ -851,16 +910,19 @@ sdSelect.addEventListener('change', () => {
 });
 
 // Toggle sub-sections when mode changes
-document.querySelectorAll<HTMLInputElement>('input[name="xfer-mode"]').forEach((radio) => {
-  radio.addEventListener('change', () => {
-    updateModeVisibility();
+xferModeBtns.forEach((btn) => {
+  btn.addEventListener('click', () => {
+    setXferMode(btn.dataset.mode as 'new' | 'existing');
     updateTransferButtonCount();
   });
 });
 
-groupByDateCb.addEventListener('change', () => {
-  updateModeVisibility();
-  updateTransferButtonCount();
+groupByBtns.forEach((btn) => {
+  btn.addEventListener('click', () => {
+    groupByDateCb.checked = btn.dataset.group === 'date';
+    updateModeVisibility();
+    updateTransferButtonCount();
+  });
 });
 
 // Delegated handlers: click-to-reveal on fileList rows; merge/unmerge buttons
@@ -939,6 +1001,7 @@ transferBtn.addEventListener('click', async () => {
   scanBtn.disabled = true;
   instantTransferBtn.disabled = true;
   cancelBtn.classList.remove('hidden');
+  progressTrack.classList.remove('hidden');
   progressBar.style.width = '0%';
   transferInProgress = true;
 
@@ -979,6 +1042,15 @@ $<HTMLButtonElement>('#cancel-transfer-btn').addEventListener('click', () => {
 
 // --- Smart suggestion ---
 
+// Default "New folder" name for single-folder mode: earliest day in the chosen
+// format + " - ". Uses the plain day (no a/b/c split suffix) since everything
+// lands in one folder.
+function defaultNewFolderName(media: { captureDate?: string }[]): string {
+  const keys = [...detectSessions(media).keys()].filter((k) => k !== 'unknown').sort();
+  const day = keys[0] ? keys[0].split('#')[0] : new Date().toISOString().slice(0, 10);
+  return `${formatFolderDate(day, folderDateFormat)} - `;
+}
+
 function suggestTransferMode(
   missing: { captureDate?: string }[],
 ): { mode: string; folderName?: string } {
@@ -994,6 +1066,28 @@ function suggestTransferMode(
   }
 
   return { mode: 'grouped' };
+}
+
+// Predict the destination folder for new files. If some SD files are already
+// backed up inside an existing destination folder (e.g. an ongoing "Scotland"
+// trip), the new ones most likely belong there too. Picks the most-used
+// suggested folder whose name also exists in the destination.
+function predictExistingFolder(
+  suggested: { folder: string; count: number }[],
+  existingFolders: string[],
+): string | null {
+  const set = new Set(existingFolders);
+  const ranked = [...suggested].sort((a, b) => b.count - a.count);
+  for (const sf of ranked) {
+    // Walk up the path and take the deepest segment that exists as a top-level
+    // destination folder, so a camera subfolder (Scotland/DJI) resolves to
+    // "Scotland" — the camera-subfolder option then re-adds the DJI level.
+    const parts = sf.folder.split('/').filter(Boolean);
+    for (let i = parts.length - 1; i >= 0; i--) {
+      if (set.has(parts[i])) return parts[i];
+    }
+  }
+  return null;
 }
 
 // --- Session rendering ---
@@ -1178,7 +1272,6 @@ function escapeHtml(s: string): string {
 
 // --- Settings panel ---
 
-const settingsToggle = document.getElementById('settings-toggle')!;
 const settingsPanel = document.getElementById('settings-panel')!;
 const mainContent = document.getElementById('main-content')!;
 const cfgHost = $<HTMLInputElement>('#cfg-host');
@@ -1229,61 +1322,51 @@ function updateCardSummaries(host: string, _folders?: unknown, geminiKey?: strin
     geminiOk ? 'API key set' : 'Not configured';
 }
 
-settingsToggle.addEventListener('click', async () => {
-  const isOpen = !settingsPanel.classList.contains('hidden');
-  if (isOpen) {
-    settingsPanel.classList.add('hidden');
-    showActiveTab();
+async function loadSettings() {
+  const cfgPathsList = document.getElementById('cfg-paths-list')!;
+  const cfgDestsList = document.getElementById('cfg-dests-list')!;
+
+  const [host, port, user, pass, folders, secure, checkPaths, savedDests, geminiKey, dateFormat] = await Promise.all([
+    window.api.getSetting('synologyHost'),
+    window.api.getSetting('synologyPort'),
+    window.api.getSetting('synologyUser'),
+    window.api.getSetting('synologyPass'),
+    window.api.getSetting('synologyFolders'),
+    window.api.getSetting('synologySecure'),
+    window.api.getSetting('checkPaths'),
+    window.api.getSetting('transferDests'),
+    window.api.getSetting('geminiKey'),
+    window.api.getSetting('dateFormat'),
+  ]);
+  cfgHost.value = host ?? '';
+  cfgPort.value = String(port ?? 5001);
+  cfgUser.value = user ?? '';
+  cfgPass.value = pass ?? '';
+  // Support legacy space-separated string or new array format
+  if (Array.isArray(folders)) {
+    currentSynoFolders = folders;
+  } else if (typeof folders === 'string' && folders) {
+    currentSynoFolders = folders.split(/\s+/).filter(Boolean);
   } else {
-    const cfgPathsList = document.getElementById('cfg-paths-list')!;
-    const cfgDestsList = document.getElementById('cfg-dests-list')!;
-
-    const [host, port, user, pass, folders, secure, checkPaths, savedDests, geminiKey, dateFormat] = await Promise.all([
-      window.api.getSetting('synologyHost'),
-      window.api.getSetting('synologyPort'),
-      window.api.getSetting('synologyUser'),
-      window.api.getSetting('synologyPass'),
-      window.api.getSetting('synologyFolders'),
-      window.api.getSetting('synologySecure'),
-      window.api.getSetting('checkPaths'),
-      window.api.getSetting('transferDests'),
-      window.api.getSetting('geminiKey'),
-      window.api.getSetting('dateFormat'),
-    ]);
-    cfgHost.value = host ?? '';
-    cfgPort.value = String(port ?? 5001);
-    cfgUser.value = user ?? '';
-    cfgPass.value = pass ?? '';
-    // Support legacy space-separated string or new array format
-    if (Array.isArray(folders)) {
-      currentSynoFolders = folders;
-    } else if (typeof folders === 'string' && folders) {
-      currentSynoFolders = folders.split(/\s+/).filter(Boolean);
-    } else {
-      currentSynoFolders = [];
-    }
-    renderSynoFolderChips(document.getElementById('cfg-folders-list')!);
-    cfgSecure.checked = secure ?? true;
-    $<HTMLInputElement>('#cfg-gemini-key').value = geminiKey ?? '';
-    $<HTMLInputElement>('#cfg-date-format').value = dateFormat ?? DEFAULT_DATE_FORMAT;
-    updateDateFormatPreview();
-
-    currentCheckPaths = normalizeCheckPaths(checkPaths);
-    renderPathChips(cfgPathsList);
-
-    currentTransferDests = savedDests ?? [...transferDests];
-    renderDestChips(cfgDestsList);
-
-    // Collapse all detail sections
-    document.querySelectorAll('[id^="card-"][id$="-detail"]').forEach((d) => d.classList.add('hidden'));
-
-    updateCardSummaries(host ?? '', undefined, geminiKey ?? '');
-
-    mainContent.classList.add('hidden');
-    syncContent.classList.add('hidden');
-    settingsPanel.classList.remove('hidden');
+    currentSynoFolders = [];
   }
-});
+  renderSynoFolderChips(document.getElementById('cfg-folders-list')!);
+  cfgSecure.checked = secure ?? true;
+  $<HTMLInputElement>('#cfg-gemini-key').value = geminiKey ?? '';
+  $<HTMLInputElement>('#cfg-date-format').value = dateFormat ?? DEFAULT_DATE_FORMAT;
+  updateDateFormatPreview();
+
+  currentCheckPaths = normalizeCheckPaths(checkPaths);
+  renderPathChips(cfgPathsList);
+
+  currentTransferDests = savedDests ?? [...transferDests];
+  renderDestChips(cfgDestsList);
+
+  // Collapse all detail sections
+  document.querySelectorAll('[id^="card-"][id$="-detail"]').forEach((d) => d.classList.add('hidden'));
+
+  updateCardSummaries(host ?? '', undefined, geminiKey ?? '');
+}
 
 let currentCheckPaths: { path: string; fallbackOnly?: boolean }[] = [];
 let currentTransferDests: string[] = [];
@@ -1432,8 +1515,7 @@ cfgSave.addEventListener('click', async () => {
   populateTransferDests();
   populateSyncDests();
 
-  settingsPanel.classList.add('hidden');
-  showActiveTab();
+  setActiveTab('backup');
 
   window.api.checkSourcesStatus();
 });
@@ -1447,18 +1529,23 @@ let activeTab = 'backup';
 function showActiveTab() {
   mainContent.classList.toggle('hidden', activeTab !== 'backup');
   syncContent.classList.toggle('hidden', activeTab !== 'sync');
+  settingsPanel.classList.toggle('hidden', activeTab !== 'settings');
+}
+
+function setActiveTab(tab: string) {
+  activeTab = tab;
+  tabBtns.forEach((b) => {
+    b.classList.toggle('bg-neutral-700', b.dataset.tab === activeTab);
+    b.classList.toggle('text-neutral-200', b.dataset.tab === activeTab);
+    b.classList.toggle('text-neutral-500', b.dataset.tab !== activeTab);
+  });
+  showActiveTab();
 }
 
 tabBtns.forEach((btn) => {
-  btn.addEventListener('click', () => {
-    activeTab = btn.dataset.tab!;
-    tabBtns.forEach((b) => {
-      b.classList.toggle('bg-neutral-700', b.dataset.tab === activeTab);
-      b.classList.toggle('text-neutral-200', b.dataset.tab === activeTab);
-      b.classList.toggle('text-neutral-500', b.dataset.tab !== activeTab);
-    });
-    settingsPanel.classList.add('hidden');
-    showActiveTab();
+  btn.addEventListener('click', async () => {
+    if (btn.dataset.tab === 'settings') await loadSettings();
+    setActiveTab(btn.dataset.tab!);
   });
 });
 

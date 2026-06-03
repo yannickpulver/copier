@@ -4,6 +4,10 @@ import type { SynologyConfig } from './types';
 
 type NasIndex = Map<string, string[]>;
 
+// Bound every request so an unreachable NAS rejects instead of hanging forever.
+const LOGIN_TIMEOUT_MS = 8000;
+const LIST_TIMEOUT_MS = 15000;
+
 function makeKey(name: string, size: number): string {
   return `${name}|${size}`;
 }
@@ -25,7 +29,7 @@ export class SynologyClient {
     this.baseUrl = `${proto}://${config.host}:${config.port}`;
   }
 
-  async login(): Promise<void> {
+  async login(timeoutMs = LOGIN_TIMEOUT_MS): Promise<void> {
     const params = new URLSearchParams({
       api: 'SYNO.API.Auth',
       version: '6',
@@ -35,7 +39,7 @@ export class SynologyClient {
       session: 'FileStation',
       format: 'sid',
     });
-    const resp = await this.request(`/webapi/auth.cgi?${params}`);
+    const resp = await this.request(`/webapi/auth.cgi?${params}`, timeoutMs);
     if (!resp.success) {
       throw new Error(`Synology login failed: error ${resp.error?.code ?? 'unknown'}`);
     }
@@ -80,7 +84,7 @@ export class SynologyClient {
               _sid: this.sid,
             });
 
-            const resp = await this.request(`/webapi/entry.cgi?${params}`);
+            const resp = await this.request(`/webapi/entry.cgi?${params}`, LIST_TIMEOUT_MS);
             if (!resp.success || !resp.data) break;
 
             const items = resp.data.files ?? [];
@@ -125,11 +129,11 @@ export class SynologyClient {
     return index;
   }
 
-  private request(urlPath: string): Promise<SynoResponse> {
+  private request(urlPath: string, timeoutMs = LIST_TIMEOUT_MS): Promise<SynoResponse> {
     return new Promise((resolve, reject) => {
       const url = new URL(urlPath, this.baseUrl);
       const mod = this.config.secure ? https : http;
-      const options = { rejectUnauthorized: false };
+      const options = { rejectUnauthorized: false, timeout: timeoutMs };
 
       const req = mod.get(url, options as any, (res) => {
         let data = '';
@@ -141,6 +145,9 @@ export class SynologyClient {
             reject(new Error(`Invalid JSON response from ${urlPath}`));
           }
         });
+      });
+      req.on('timeout', () => {
+        req.destroy(new Error(`Synology request timed out after ${timeoutMs}ms (${this.config.host})`));
       });
       req.on('error', reject);
       req.end();
