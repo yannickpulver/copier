@@ -98,6 +98,7 @@ export interface SuggestedFolder {
   folder: string;
   count: number;
   source: string;
+  newestMtime: number; // newest mtime among the matched SD files (recency signal)
 }
 
 // Walk up to the nearest ancestor whose name starts with YYYY.MM.DD or YYYY-MM-DD
@@ -118,8 +119,8 @@ export function checkBackedUp(
   const merged = mergeIndexes(...sourceIndexes.map((s) => s.index));
   const backedUp: FileInfo[] = [];
   const missing: FileInfo[] = [];
-  // Track folder → { count, source }
-  const folderInfo = new Map<string, { count: number; source: string }>();
+  // Track folder → { count, source, newestMtime }
+  const folderInfo = new Map<string, { count: number; source: string; newestMtime: number }>();
 
   // Build folder→source lookup (also index normalized date-level paths)
   const folderToSource = new Map<string, string>();
@@ -143,8 +144,13 @@ export function checkBackedUp(
         const existing = folderInfo.get(top);
         if (existing) {
           existing.count++;
+          existing.newestMtime = Math.max(existing.newestMtime, f.mtime ?? 0);
         } else {
-          folderInfo.set(top, { count: 1, source: folderToSource.get(p) ?? folderToSource.get(top) ?? 'Unknown' });
+          folderInfo.set(top, {
+            count: 1,
+            source: folderToSource.get(p) ?? folderToSource.get(top) ?? 'Unknown',
+            newestMtime: f.mtime ?? 0,
+          });
         }
       }
     } else {
@@ -153,7 +159,7 @@ export function checkBackedUp(
   }
 
   const suggestedFolders = [...folderInfo.entries()]
-    .map(([folder, { count, source }]) => ({ folder, count, source }))
+    .map(([folder, { count, source, newestMtime }]) => ({ folder, count, source, newestMtime }))
     .sort((a, b) => b.count - a.count)
     .slice(0, 10);
 

@@ -144,6 +144,7 @@ async function walkDir(
           size: stat.size,
           relPath: path.relative(root, full),
           fullPath: full,
+          mtime: stat.mtimeMs,
           isMedia: MEDIA_EXTS.has(ext),
         });
       } catch {
