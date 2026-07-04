@@ -4,6 +4,16 @@ import type { FileInfo } from './types';
 
 export type NasIndex = Map<string, string[]>;
 
+// System / recycle-bin folders that should never be scanned or suggested.
+// Synology's @eaDir thumbnail dirs in particular shadow original filenames
+// and make SMB walks several times slower.
+const IGNORED_FOLDERS = new Set(
+  ['$RECYCLE.BIN', 'System Volume Information', '#recycle', '@eaDir', '.Trashes', 'found.000']
+    .map((n) => n.toLowerCase()),
+);
+
+const STAT_CONCURRENCY = 16;
+
 function makeKey(name: string, size: number): string {
   return `${name}|${size}`;
 }
@@ -11,55 +21,72 @@ function makeKey(name: string, size: number): string {
 export async function indexNas(
   nasPath: string,
   onProgress?: (count: number, folder: string) => void,
+  targetKeys?: Set<string>,
 ): Promise<NasIndex> {
   const index: NasIndex = new Map();
-  await walkNas(nasPath, index, onProgress);
+  const remaining = targetKeys ? new Set(targetKeys) : null;
+  await walkNas(nasPath, index, remaining, onProgress);
   return index;
 }
 
+/** Returns true when all target keys have been found (caller can stop). */
 async function walkNas(
   dir: string,
   index: NasIndex,
+  remaining: Set<string> | null,
   onProgress?: (count: number, folder: string) => void,
-): Promise<void> {
+): Promise<boolean> {
   let entries: fs.Dirent[];
   try {
     entries = await fs.promises.readdir(dir, { withFileTypes: true });
   } catch {
-    return;
+    return false;
   }
 
   if (onProgress) onProgress(index.size, path.basename(dir));
 
   const subdirs: string[] = [];
+  const fileNames: string[] = [];
 
   for (const entry of entries) {
-    if (entry.name.startsWith('.')) continue;
-    const full = path.join(dir, entry.name);
-
+    if (entry.name.startsWith('.') || IGNORED_FOLDERS.has(entry.name.toLowerCase())) continue;
     if (entry.isDirectory()) {
-      subdirs.push(full);
+      subdirs.push(path.join(dir, entry.name));
     } else if (entry.isFile()) {
+      fileNames.push(entry.name);
+    }
+  }
+
+  // Stat files with bounded concurrency — sequential stats over SMB are
+  // one network round trip each and dominate scan time.
+  let next = 0;
+  const statWorker = async () => {
+    while (next < fileNames.length) {
+      const name = fileNames[next++];
       try {
-        const stat = await fs.promises.stat(full);
-        const key = makeKey(entry.name, stat.size);
+        const stat = await fs.promises.stat(path.join(dir, name));
+        const key = makeKey(name, stat.size);
         const existing = index.get(key);
-        if (existing) {
-          existing.push(dir);
-        } else {
-          index.set(key, [dir]);
-        }
+        if (existing) existing.push(dir);
+        else index.set(key, [dir]);
+        remaining?.delete(key);
       } catch {
         // skip
       }
     }
-  }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(STAT_CONCURRENCY, fileNames.length) }, statWorker),
+  );
+
+  if (remaining && remaining.size === 0) return true;
 
   // Sort descending so newest folders are scanned first
   subdirs.sort().reverse();
   for (const sub of subdirs) {
-    await walkNas(sub, index, onProgress);
+    if (await walkNas(sub, index, remaining, onProgress)) return true;
   }
+  return false;
 }
 
 export interface SourceIndex {
@@ -144,12 +171,6 @@ export function mergeIndexes(...indexes: NasIndex[]): NasIndex {
   }
   return merged;
 }
-
-// System / recycle-bin folders that should never appear as a destination.
-const IGNORED_FOLDERS = new Set(
-  ['$RECYCLE.BIN', 'System Volume Information', '#recycle', '@eaDir', '.Trashes', 'found.000']
-    .map((n) => n.toLowerCase()),
-);
 
 export function listExistingFolders(nasPath: string): string[] {
   try {

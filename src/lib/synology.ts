@@ -30,7 +30,8 @@ export class SynologyClient {
   }
 
   async login(timeoutMs = LOGIN_TIMEOUT_MS): Promise<void> {
-    const params = new URLSearchParams({
+    // POST body keeps the password out of URLs (proxy/NAS access logs).
+    const body = new URLSearchParams({
       api: 'SYNO.API.Auth',
       version: '6',
       method: 'login',
@@ -38,8 +39,8 @@ export class SynologyClient {
       passwd: this.config.password,
       session: 'FileStation',
       format: 'sid',
-    });
-    const resp = await this.request(`/webapi/auth.cgi?${params}`, timeoutMs);
+    }).toString();
+    const resp = await this.request('/webapi/auth.cgi', timeoutMs, body);
     if (!resp.success) {
       throw new Error(`Synology login failed: error ${resp.error?.code ?? 'unknown'}`);
     }
@@ -129,13 +130,18 @@ export class SynologyClient {
     return index;
   }
 
-  private request(urlPath: string, timeoutMs = LIST_TIMEOUT_MS): Promise<SynoResponse> {
+  private request(urlPath: string, timeoutMs = LIST_TIMEOUT_MS, postBody?: string): Promise<SynoResponse> {
     return new Promise((resolve, reject) => {
       const url = new URL(urlPath, this.baseUrl);
       const mod = this.config.secure ? https : http;
-      const options = { rejectUnauthorized: false, timeout: timeoutMs };
+      const options = {
+        method: postBody ? 'POST' : 'GET',
+        headers: postBody ? { 'Content-Type': 'application/x-www-form-urlencoded' } : undefined,
+        rejectUnauthorized: false,
+        timeout: timeoutMs,
+      };
 
-      const req = mod.get(url, options as any, (res) => {
+      const req = mod.request(url, options as any, (res) => {
         let data = '';
         res.on('data', (chunk: string) => { data += chunk; });
         res.on('end', () => {
@@ -150,6 +156,7 @@ export class SynologyClient {
         req.destroy(new Error(`Synology request timed out after ${timeoutMs}ms (${this.config.host})`));
       });
       req.on('error', reject);
+      if (postBody) req.write(postBody);
       req.end();
     });
   }

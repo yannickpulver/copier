@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, powerSaveBlocker } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, powerSaveBlocker, Notification } from 'electron';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
 import { updateElectronApp } from 'update-electron-app';
@@ -9,7 +9,8 @@ import type { NasIndex, SourceIndex } from './lib/matcher';
 import { SynologyClient } from './lib/synology';
 import { loadSynologyConfig, resolveOpReference } from './lib/credentials';
 import { enrichMetadata } from './lib/metadata';
-import { copyFiles, copyFilesGroupedByDate, checkDiskSpace } from './lib/transfer';
+import { copyBatch, flatJobs, dateGroupedJobs, groupByCamera, checkDiskSpace } from './lib/transfer';
+import type { CopyJob } from './lib/transfer';
 import { walkFolder, diffFolders, syncFiles } from './lib/sync';
 import type { SynologyConfig, FileInfo } from './lib/types';
 import { getSetting, setSetting } from './lib/store';
@@ -196,6 +197,7 @@ ipcMain.handle('scan', async (_event, sdPath: string, skipCheck?: boolean, disab
   // 2. Build sources and scan all in parallel
   interface SourceResult { name: string; index: NasIndex; ok: boolean; error?: string }
   const sources: Promise<SourceResult>[] = [];
+  const targetKeys = new Set(sdFiles.map((f) => `${f.name}|${f.size}`));
 
   // Synology API
   const synoConfig = await loadSynologyConfig();
@@ -206,7 +208,6 @@ ipcMain.handle('scan', async (_event, sdPath: string, skipCheck?: boolean, disab
         sendProgress('source', 0, 'Synology API: connecting...');
         const client = new SynologyClient(synoConfig);
         await client.login(4000);
-        const targetKeys = new Set(sdFiles.map((f) => `${f.name}|${f.size}`));
         const index = await client.indexFiles(synoConfig.folders, targetKeys, (count, folder) => {
           sendProgress('source', count, `API: ${folder}`);
         });
@@ -245,7 +246,7 @@ ipcMain.handle('scan', async (_event, sdPath: string, skipCheck?: boolean, disab
         sendProgress('source', 0, `${label}: scanning...`);
         const index = await indexNas(cp.path, (count, folder) => {
           sendProgress('source', count, `${label}: ${folder}`);
-        });
+        }, targetKeys);
         return { name: cp.path, index, ok: true };
       } catch (e: any) {
         return { name: cp.path, index: new Map(), ok: false, error: e.message };
@@ -299,14 +300,18 @@ ipcMain.handle('list-existing-folders', (_event, nasPath: string) => {
 
 let transferAbort: AbortController | null = null;
 
+function notifyTransferDone(fileCount: number, errorCount: number) {
+  if (!Notification.isSupported()) return;
+  const body = errorCount > 0
+    ? `${fileCount} files copied, ${errorCount} failed`
+    : `${fileCount} files copied`;
+  new Notification({ title: 'Transfer complete', body }).show();
+}
+
 ipcMain.handle('transfer', async (_event, files: FileInfo[], dest: string, mode: string, topic?: string, cameraSubfolder?: boolean, fileGroups?: {dest: string, files: FileInfo[]}[]) => {
   transferAbort = new AbortController();
   const { signal } = transferAbort;
   const sleepBlockId = powerSaveBlocker.start('prevent-app-suspension');
-
-  const onProgress = (current: number, total: number, name: string) => {
-    mainWindow?.webContents.send('transfer-progress', { current, total, name });
-  };
   const dateFormat = getSetting('dateFormat') || undefined;
 
   // Pre-flight: bail out before copying if the destination volume(s) lack space.
@@ -320,78 +325,39 @@ ipcMain.handle('transfer', async (_event, files: FileInfo[], dest: string, mode:
     return { errors: [], cancelled: false, insufficientSpace: shortfall };
   }
 
-  try {
-    // Multi-folder transfer (existing mode with multiple selected folders)
-    if (fileGroups && fileGroups.length > 0) {
-      const allErrors: string[] = [];
-      let done = 0;
-      const totalFiles = fileGroups.reduce((s, g) => s + g.files.length, 0);
-      for (const group of fileGroups) {
-        if (signal.aborted) break;
-        if (cameraSubfolder) {
-          const byCamera = new Map<string, FileInfo[]>();
-          for (const f of group.files) {
-            const cam = f.camera ?? 'Unknown';
-            const arr = byCamera.get(cam);
-            if (arr) arr.push(f);
-            else byCamera.set(cam, [f]);
-          }
-          for (const [camera, cameraFiles] of byCamera) {
-            if (signal.aborted) break;
-            const errors = await copyFiles(cameraFiles, path.join(group.dest, camera), (c, _t, n) => {
-              onProgress(done + c, totalFiles, n);
-            }, signal);
-            done += cameraFiles.length;
-            allErrors.push(...errors);
-          }
-        } else {
-          const errors = await copyFiles(group.files, group.dest, (c, _t, n) => {
-            onProgress(done + c, totalFiles, n);
-          }, signal);
-          done += group.files.length;
-          allErrors.push(...errors);
-        }
-      }
-      return { errors: allErrors, cancelled: signal.aborted };
-    }
-
+  // Build the full job list up front so progress totals (files and bytes)
+  // cover the whole transfer regardless of mode.
+  const jobs: CopyJob[] = [];
+  const addForDest = (groupFiles: FileInfo[], groupDest: string) => {
     if (cameraSubfolder) {
-      const byCamera = new Map<string, FileInfo[]>();
-      for (const f of files) {
-        const cam = f.camera ?? 'Unknown';
-        const existing = byCamera.get(cam);
-        if (existing) existing.push(f);
-        else byCamera.set(cam, [f]);
-      }
-      const allErrors: string[] = [];
-      let done = 0;
-      for (const [camera, cameraFiles] of byCamera) {
-        if (signal.aborted) break;
-        const cameraDest = path.join(dest, camera);
-        let errors: string[];
-        if (mode === 'grouped') {
-          errors = await copyFilesGroupedByDate(cameraFiles, cameraDest, topic ?? '', (c, t, n) => {
-            onProgress(done + c, files.length, n);
-          }, signal, dateFormat);
+      for (const [camera, cameraFiles] of groupByCamera(groupFiles)) {
+        if (mode === 'grouped' && !fileGroups?.length) {
+          jobs.push(...dateGroupedJobs(cameraFiles, path.join(groupDest, camera), topic ?? '', dateFormat));
         } else {
-          errors = await copyFiles(cameraFiles, cameraDest, (c, t, n) => {
-            onProgress(done + c, cameraFiles.length, n);
-          }, signal);
+          jobs.push(...flatJobs(cameraFiles, path.join(groupDest, camera)));
         }
-        done += cameraFiles.length;
-        allErrors.push(...errors);
       }
-      return { errors: allErrors, cancelled: signal.aborted };
-    }
-
-    let errors: string[];
-    if (mode === 'grouped') {
-      errors = await copyFilesGroupedByDate(files, dest, topic ?? '', onProgress, signal, dateFormat);
+    } else if (mode === 'grouped' && !fileGroups?.length) {
+      jobs.push(...dateGroupedJobs(groupFiles, groupDest, topic ?? '', dateFormat));
     } else {
-      errors = await copyFiles(files, dest, onProgress, signal);
+      jobs.push(...flatJobs(groupFiles, groupDest));
     }
+  };
+  if (fileGroups && fileGroups.length > 0) {
+    for (const group of fileGroups) addForDest(group.files, group.dest);
+  } else {
+    addForDest(files, dest);
+  }
+
+  try {
+    const errors = await copyBatch(jobs, (p) => {
+      mainWindow?.webContents.send('transfer-progress', p);
+      mainWindow?.setProgressBar(p.bytesTotal > 0 ? p.bytesDone / p.bytesTotal : -1);
+    }, signal);
+    if (!signal.aborted) notifyTransferDone(jobs.length - errors.length, errors.length);
     return { errors, cancelled: signal.aborted };
   } finally {
+    mainWindow?.setProgressBar(-1);
     powerSaveBlocker.stop(sleepBlockId);
     transferAbort = null;
   }
@@ -429,7 +395,7 @@ ipcMain.handle('describe-image', async (_event, filePath: string) => {
     const mimeType = mimeMap[ext] ?? 'image/jpeg';
     console.log(`[Gemini] Image size: ${(imageBuffer.length / 1024 / 1024).toFixed(1)}MB, type: ${mimeType}`);
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
+    const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent';
     const body = JSON.stringify({
       contents: [{
         parts: [
@@ -442,7 +408,7 @@ ipcMain.handle('describe-image', async (_event, filePath: string) => {
     console.log('[Gemini] Sending request...');
     const resp = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
       body,
     });
 

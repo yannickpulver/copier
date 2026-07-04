@@ -952,10 +952,39 @@ dateGroupsPreview.addEventListener('change', () => {
 
 // --- Transfer ---
 
-window.api.onTransferProgress(({ current, total }) => {
-  const pct = total > 0 ? (current / total) * 100 : 0;
+let transferSpeed: { t: number; bytes: number; rate: number } | null = null;
+
+function formatEta(seconds: number): string {
+  if (!isFinite(seconds) || seconds < 0) return '';
+  const s = Math.round(seconds);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
+window.api.onTransferProgress(({ current, total, bytesDone, bytesTotal }) => {
+  const pct = bytesTotal > 0
+    ? (bytesDone / bytesTotal) * 100
+    : (total > 0 ? (current / total) * 100 : 0);
   progressBar.style.width = `${pct}%`;
-  progressLabel.textContent = `${current}/${total}`;
+
+  const now = performance.now();
+  if (!transferSpeed) transferSpeed = { t: now, bytes: bytesDone ?? 0, rate: 0 };
+  const dt = (now - transferSpeed.t) / 1000;
+  if (dt >= 0.5 && bytesDone != null) {
+    const inst = (bytesDone - transferSpeed.bytes) / dt;
+    transferSpeed.rate = transferSpeed.rate > 0 ? transferSpeed.rate * 0.7 + inst * 0.3 : inst;
+    transferSpeed.t = now;
+    transferSpeed.bytes = bytesDone;
+  }
+
+  let label = `${current}/${total}`;
+  if (transferSpeed.rate > 0 && bytesTotal > 0) {
+    const eta = formatEta((bytesTotal - bytesDone) / transferSpeed.rate);
+    label += ` · ${formatSize(transferSpeed.rate)}/s${eta ? ` · ${eta} left` : ''}`;
+  }
+  progressLabel.textContent = label;
 });
 
 transferBtn.addEventListener('click', async () => {
@@ -1003,6 +1032,7 @@ transferBtn.addEventListener('click', async () => {
   cancelBtn.classList.remove('hidden');
   progressTrack.classList.remove('hidden');
   progressBar.style.width = '0%';
+  transferSpeed = null;
   transferInProgress = true;
 
   try {
