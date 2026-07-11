@@ -31,7 +31,7 @@ A source file is compared against **all** files in the target tree, indexed by f
 - For each **Present** pair, read Finder tags on both sides via the `com.apple.metadata:_kMDItemUserTags` extended attribute using the `xattr` CLI, spawned in batches (works on SMB/NAS volumes where Spotlight/`mdls` does not).
 - Pairs where the source has tags the target lacks go into a third bucket: **Tags**.
 - Merge semantics = **union**: source tags are added to the target file; target-only tags are kept. Tags are never removed.
-- Writing uses `xattr -wx` with a binary plist payload (built from XML via `plutil -convert binary1`, or a pure-JS bplist writer).
+- Writing uses `xattr -w` with an XML plist payload (built with the existing `plist` dependency) — macOS property-list readers auto-detect XML vs binary, verified on this machine. Reading must decode both binary plists (Finder-written) and XML plists (written by us).
 - Non-macOS: the tag step is skipped silently.
 
 ## Sync action
