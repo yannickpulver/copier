@@ -7,7 +7,8 @@ export interface SyncFileInfo {
   name: string;
   size: number;
   mtime: number; // ms since epoch
-  destRelPath?: string; // set when dest file lives at a different path
+  destRelPath?: string; // display-only: where the differing/matched candidate lives in dest.
+                         // Never a copy target — syncFiles always copies to relPath.
 }
 
 export interface MatchedPair {
@@ -114,7 +115,7 @@ export async function syncFiles(
   for (let i = 0; i < files.length; i++) {
     if (signal?.aborted) break;
     const f = files[i];
-    const destPath = path.join(destRoot, f.destRelPath ?? f.relPath);
+    const destPath = path.join(destRoot, f.relPath);
     try {
       await fs.promises.mkdir(path.dirname(destPath), { recursive: true });
       await fs.promises.copyFile(f.fullPath, destPath);

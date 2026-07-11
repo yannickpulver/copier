@@ -1,5 +1,8 @@
-import { describe, it, expect } from 'vitest';
-import { diffFolders, SyncFileInfo } from './sync';
+import { describe, it, expect, afterEach } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { diffFolders, syncFiles, SyncFileInfo } from './sync';
 
 const f = (relPath: string, size: number, mtime = 0): SyncFileInfo => ({
   relPath,
@@ -56,5 +59,62 @@ describe('diffFolders', () => {
     const exact = f('sub/a.jpg', 100);
     const diff = diffFolders([src], [other, exact]);
     expect(diff.present[0].dest).toBe(exact);
+  });
+
+  it('two source files sharing a name: the size-matching one is present, the other is different and points at the match', () => {
+    const a = f('A/a.jpg', 100);
+    const b = f('B/a.jpg', 200);
+    const dest = f('x/a.jpg', 100);
+    const diff = diffFolders([a, b], [dest]);
+    expect(diff.present).toEqual([{ src: a, dest }]);
+    expect(diff.different).toHaveLength(1);
+    expect(diff.different[0]).toEqual({ ...b, destRelPath: 'x/a.jpg' });
+    expect(diff.missing).toEqual([]);
+  });
+
+  it('multi-candidate mixed sizes: matches the dest with the same size, not the first found', () => {
+    const src = f('a.jpg', 100);
+    const wrongSize = f('sub/a.jpg', 200);
+    const rightSize = f('deep/a.jpg', 100);
+    const diff = diffFolders([src], [wrongSize, rightSize]);
+    expect(diff.present).toEqual([{ src, dest: rightSize }]);
+    expect(diff.different).toEqual([]);
+    expect(diff.missing).toEqual([]);
+  });
+});
+
+describe('syncFiles', () => {
+  let tmpDir: string;
+
+  afterEach(() => {
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('always copies to the source relPath, never to destRelPath (which is display-only)', async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'copier-sync-test-'));
+    const srcDir = path.join(tmpDir, 'src');
+    const destRoot = path.join(tmpDir, 'dest');
+    fs.mkdirSync(path.join(srcDir, 'B'), { recursive: true });
+    fs.mkdirSync(path.join(destRoot, 'x'), { recursive: true });
+    const srcFile = path.join(srcDir, 'B', 'a.jpg');
+    fs.writeFileSync(srcFile, 'source content');
+    // Simulate an existing candidate at the matched (but different) location that must not be touched.
+    fs.writeFileSync(path.join(destRoot, 'x', 'a.jpg'), 'existing content');
+
+    const file: SyncFileInfo = {
+      relPath: 'B/a.jpg',
+      fullPath: srcFile,
+      name: 'a.jpg',
+      size: fs.statSync(srcFile).size,
+      mtime: 0,
+      destRelPath: 'x/a.jpg',
+    };
+
+    const errors = await syncFiles([file], destRoot);
+    expect(errors).toEqual([]);
+
+    expect(fs.existsSync(path.join(destRoot, 'B', 'a.jpg'))).toBe(true);
+    expect(fs.readFileSync(path.join(destRoot, 'B', 'a.jpg'), 'utf8')).toBe('source content');
+    expect(fs.readFileSync(path.join(destRoot, 'x', 'a.jpg'), 'utf8')).toBe('existing content');
   });
 });
