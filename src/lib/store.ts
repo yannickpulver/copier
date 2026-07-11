@@ -14,6 +14,10 @@ interface AppSettings {
   synologySecure?: boolean;
   synologyFolders?: string;
   dateFormat?: string;
+  syncSource?: string;
+  syncExactDest?: string; // legacy — migrated to syncTarget/syncTargetExact on load
+  syncTarget?: string;
+  syncTargetExact?: boolean;
 }
 
 const storePath = path.join(app.getPath('userData'), 'settings.json');
