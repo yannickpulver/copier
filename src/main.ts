@@ -11,6 +11,7 @@ import { loadSynologyConfig, resolveOpReference } from './lib/credentials';
 import { enrichMetadata } from './lib/metadata';
 import { copyFiles, copyFilesGroupedByDate, checkDiskSpace } from './lib/transfer';
 import { walkFolder, diffFolders, syncFiles } from './lib/sync';
+import { readTagsRecursive, computeTagUpdates, writeTags, TagUpdate } from './lib/tags';
 import type { SynologyConfig, FileInfo } from './lib/types';
 import { getSetting, setSetting } from './lib/store';
 
@@ -523,9 +524,18 @@ ipcMain.handle('sync-scan', async (_event, sourcePath: string, destPath: string)
   });
 
   const diff = diffFolders(sourceFiles, destFiles);
+
+  mainWindow?.webContents.send('sync-progress', { step: 'tags', count: diff.present.length, folder: 'Checking Finder tags...' });
+  const [srcTags, destTags] = await Promise.all([
+    readTagsRecursive(sourcePath),
+    readTagsRecursive(destPath),
+  ]);
+  const tagUpdates = computeTagUpdates(diff.present, srcTags, destTags);
+
   return {
     missing: diff.missing,
     different: diff.different,
+    tagUpdates,
     presentCount: diff.present.length,
     sourceTotal: sourceFiles.length,
     destTotal: destFiles.length,
@@ -534,15 +544,29 @@ ipcMain.handle('sync-scan', async (_event, sourcePath: string, destPath: string)
 
 let syncAbort: AbortController | null = null;
 
-ipcMain.handle('sync-transfer', async (_event, files: any[], destRoot: string) => {
+ipcMain.handle('sync-transfer', async (_event, files: any[], destRoot: string, tagUpdates: TagUpdate[] = []) => {
   syncAbort = new AbortController();
   const { signal } = syncAbort;
   const sleepBlockId = powerSaveBlocker.start('prevent-app-suspension');
+  const total = files.length + tagUpdates.length;
 
   try {
-    const errors = await syncFiles(files, destRoot, (current, total, name) => {
+    const errors = await syncFiles(files, destRoot, (current, _total, name) => {
       mainWindow?.webContents.send('sync-transfer-progress', { current, total, name });
     }, signal);
+
+    let done = files.length;
+    for (const u of tagUpdates) {
+      if (signal.aborted) break;
+      try {
+        await writeTags(u.destPath, u.tags);
+      } catch (e: any) {
+        errors.push(`tags ${u.relPath}: ${e.message}`);
+      }
+      done++;
+      mainWindow?.webContents.send('sync-transfer-progress', { current: done, total, name: u.relPath });
+    }
+
     return { errors, cancelled: signal.aborted };
   } finally {
     powerSaveBlocker.stop(sleepBlockId);

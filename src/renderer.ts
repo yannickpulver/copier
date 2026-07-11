@@ -40,11 +40,12 @@ declare global {
       syncScan: (sourcePath: string, destPath: string) => Promise<{
         missing: any[];
         different: any[];
+        tagUpdates: any[];
         presentCount: number;
         sourceTotal: number;
         destTotal: number;
       }>;
-      syncTransfer: (files: any[], destRoot: string) => Promise<{ errors: string[]; cancelled: boolean }>;
+      syncTransfer: (files: any[], destRoot: string, tagUpdates: any[]) => Promise<{ errors: string[]; cancelled: boolean }>;
       cancelSync: () => Promise<void>;
       onSyncProgress: (cb: (data: { step: string; count: number; folder: string }) => void) => () => void;
       onSyncTransferProgress: (cb: (data: { current: number; total: number; name: string }) => void) => () => void;
@@ -1567,6 +1568,7 @@ const syncProgressLabel = document.getElementById('sync-progress-label')!;
 
 let syncSource = '';
 let syncFilesToTransfer: any[] = [];
+let syncTagUpdates: any[] = [];
 
 function syncEffectiveDest(): string {
   const base = syncDestSelect.value;
@@ -1654,7 +1656,8 @@ syncDestSelect.addEventListener('change', () => {
 });
 
 window.api.onSyncProgress(({ step, count, folder }) => {
-  syncStatus.textContent = `${step === 'source' ? 'Source' : 'Dest'}: ${count} files — ${folder}`;
+  const label = step === 'source' ? 'Source' : step === 'dest' ? 'Target' : 'Tags';
+  syncStatus.textContent = `${label}: ${count} files — ${folder}`;
 });
 
 window.api.onSyncTransferProgress(({ current, total }) => {
@@ -1665,6 +1668,7 @@ window.api.onSyncTransferProgress(({ current, total }) => {
 
 function resetSyncResults() {
   syncFilesToTransfer = [];
+  syncTagUpdates = [];
   syncDiffList.innerHTML = '';
   syncResults.classList.add('hidden');
   syncAllSynced.classList.add('hidden');
@@ -1697,6 +1701,28 @@ function renderSyncBucket(title: string, colorClass: string, files: any[]): stri
   `;
 }
 
+function renderTagBucket(updates: any[]): string {
+  if (!updates.length) return '';
+  return `
+    <details open class="border border-neutral-700 rounded-md overflow-hidden mt-1">
+      <summary class="flex items-center gap-3 px-3 py-2 bg-neutral-800/50 hover:bg-neutral-800 cursor-pointer text-xs">
+        <span class="font-medium text-blue-400">Tags</span>
+        <span class="text-neutral-500">${updates.length} file${updates.length > 1 ? 's' : ''}</span>
+      </summary>
+      <table class="w-full text-xs">
+        <tbody class="divide-y divide-neutral-800">
+          ${updates.map((u) => `
+            <tr class="hover:bg-neutral-800/50 cursor-pointer" data-path="${escapeHtml(u.destPath)}">
+              <td class="px-3 py-1.5 truncate max-w-xs">${escapeHtml(u.relPath)}</td>
+              <td class="px-3 py-1.5 text-right text-blue-300 whitespace-nowrap">${u.addedNames.map((n: string) => `+${escapeHtml(n)}`).join(' ')}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </details>
+  `;
+}
+
 // Click-to-reveal for all sync result rows (bound once, not per scan)
 syncDiffList.addEventListener('click', (e) => {
   const row = (e.target as HTMLElement).closest('tr');
@@ -1714,18 +1740,24 @@ syncScanBtn.addEventListener('click', async () => {
     const result = await window.api.syncScan(syncSource, syncEffectiveDest());
     const allDiff = [...result.missing, ...result.different];
     syncFilesToTransfer = allDiff;
+    syncTagUpdates = result.tagUpdates;
 
-    syncStatus.textContent = `${result.sourceTotal} source, ${result.destTotal} target — ${result.missing.length} missing, ${result.different.length} different, ${result.presentCount} present`;
+    const tagNote = result.tagUpdates.length ? `, ${result.tagUpdates.length} tag updates` : '';
+    syncStatus.textContent = `${result.sourceTotal} source, ${result.destTotal} target — ${result.missing.length} missing, ${result.different.length} different, ${result.presentCount} present${tagNote}`;
 
-    if (allDiff.length === 0) {
+    if (allDiff.length === 0 && result.tagUpdates.length === 0) {
       syncAllSynced.classList.remove('hidden');
     } else {
       syncResults.classList.remove('hidden');
       syncTransferSection.classList.remove('hidden');
-      syncTransferBtn.textContent = `Sync ${allDiff.length} files`;
+      const parts = [];
+      if (allDiff.length) parts.push(`${allDiff.length} file${allDiff.length > 1 ? 's' : ''}`);
+      if (result.tagUpdates.length) parts.push(`${result.tagUpdates.length} tag${result.tagUpdates.length > 1 ? 's' : ''}`);
+      syncTransferBtn.textContent = `Sync ${parts.join(' · ')}`;
       syncDiffList.innerHTML =
         renderSyncBucket('Missing', 'text-red-400', result.missing) +
-        renderSyncBucket('Different', 'text-yellow-400', result.different);
+        renderSyncBucket('Different', 'text-yellow-400', result.different) +
+        renderTagBucket(result.tagUpdates);
     }
   } catch (e: any) {
     syncStatus.textContent = `Error: ${e.message}`;
@@ -1735,7 +1767,7 @@ syncScanBtn.addEventListener('click', async () => {
 });
 
 syncTransferBtn.addEventListener('click', async () => {
-  if (!syncFilesToTransfer.length || !syncDestSelect.value) return;
+  if ((!syncFilesToTransfer.length && !syncTagUpdates.length) || !syncDestSelect.value) return;
 
   syncTransferBtn.disabled = true;
   syncScanBtn.disabled = true;
@@ -1743,7 +1775,7 @@ syncTransferBtn.addEventListener('click', async () => {
   syncProgressBar.style.width = '0%';
 
   try {
-    const result = await window.api.syncTransfer(syncFilesToTransfer, syncEffectiveDest());
+    const result = await window.api.syncTransfer(syncFilesToTransfer, syncEffectiveDest(), syncTagUpdates);
     if (result.cancelled) {
       syncProgressLabel.textContent = 'Cancelled';
       syncStatus.textContent = 'Sync cancelled';

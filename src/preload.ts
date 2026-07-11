@@ -48,8 +48,8 @@ contextBridge.exposeInMainWorld('api', {
   // Folder Sync
   syncScan: (sourcePath: string, destPath: string) =>
     ipcRenderer.invoke('sync-scan', sourcePath, destPath),
-  syncTransfer: (files: any[], destRoot: string) =>
-    ipcRenderer.invoke('sync-transfer', files, destRoot),
+  syncTransfer: (files: any[], destRoot: string, tagUpdates: any[]) =>
+    ipcRenderer.invoke('sync-transfer', files, destRoot, tagUpdates),
   cancelSync: () => ipcRenderer.invoke('cancel-sync'),
   onSyncProgress: (cb: (data: any) => void) => {
     const listener = (_event: any, data: any) => cb(data);
