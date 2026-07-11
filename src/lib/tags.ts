@@ -88,7 +88,10 @@ export function computeTagUpdates(
 export async function readTagsRecursive(root: string): Promise<Map<string, string[]>> {
   if (process.platform !== 'darwin') return new Map();
   const stdout = await new Promise<string>((resolve) => {
-    const child = spawn('xattr', ['-rpx', TAG_XATTR, root]);
+    // stderr is piped to 'ignore': files without the attr print noise there, and with
+    // thousands of untagged files (typical for an SD card) an unconsumed pipe fills its
+    // OS buffer and deadlocks the child process if we don't discard it.
+    const child = spawn('xattr', ['-rpx', TAG_XATTR, root], { stdio: ['ignore', 'pipe', 'ignore'] });
     const chunks: Buffer[] = [];
     child.stdout.on('data', (c: Buffer) => chunks.push(c));
     child.on('close', () => resolve(Buffer.concat(chunks).toString('utf8')));
