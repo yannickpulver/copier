@@ -49,6 +49,7 @@
     "vitest": "^4.1.10"
   },
   "dependencies": {
+    "bplist-parser": "^0.3.2",
     "electron-squirrel-startup": "^1.0.1",
     "exifreader": "^4.37.0",
     "overlayscrollbars": "^2.15.1",
