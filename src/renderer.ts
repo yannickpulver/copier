@@ -1574,17 +1574,33 @@ let syncExactDest = '';
 const syncExactBtn = document.getElementById('sync-exact-btn')!;
 const syncExactLabel = document.getElementById('sync-exact-label')!;
 const syncExactClear = document.getElementById('sync-exact-clear')!;
+const syncExactDrop = document.getElementById('sync-exact-drop')!;
 
 function setSyncExactDest(p: string) {
   syncExactDest = p;
   window.api.setSetting('syncExactDest', p);
-  syncExactLabel.textContent = p;
-  syncExactLabel.classList.toggle('hidden', !p);
+  syncExactLabel.textContent = p || 'or drop folder';
+  syncExactLabel.classList.toggle('text-blue-400', !!p);
+  syncExactLabel.classList.toggle('text-neutral-500', !p);
   syncExactClear.classList.toggle('hidden', !p);
   syncScanBtn.disabled = !syncSource || !syncEffectiveDest();
   updateSyncDestHint();
   resetSyncResults();
 }
+
+syncExactDrop.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  syncExactDrop.classList.replace('border-neutral-800', 'border-blue-500');
+});
+syncExactDrop.addEventListener('dragleave', () => {
+  syncExactDrop.classList.replace('border-blue-500', 'border-neutral-800');
+});
+syncExactDrop.addEventListener('drop', (e) => {
+  e.preventDefault();
+  syncExactDrop.classList.replace('border-blue-500', 'border-neutral-800');
+  const file = e.dataTransfer?.files[0];
+  if (file) setSyncExactDest(window.api.getPathForFile(file));
+});
 
 syncExactBtn.addEventListener('click', async () => {
   const p = await window.api.browseFolder(syncExactDest || syncDestSelect.value || undefined);
