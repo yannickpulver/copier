@@ -1570,7 +1570,31 @@ let syncSource = '';
 let syncFilesToTransfer: any[] = [];
 let syncTagUpdates: any[] = [];
 
+let syncExactDest = '';
+const syncExactBtn = document.getElementById('sync-exact-btn')!;
+const syncExactLabel = document.getElementById('sync-exact-label')!;
+const syncExactClear = document.getElementById('sync-exact-clear')!;
+
+function setSyncExactDest(p: string) {
+  syncExactDest = p;
+  window.api.setSetting('syncExactDest', p);
+  syncExactLabel.textContent = p;
+  syncExactLabel.classList.toggle('hidden', !p);
+  syncExactClear.classList.toggle('hidden', !p);
+  syncScanBtn.disabled = !syncSource || !syncEffectiveDest();
+  updateSyncDestHint();
+  resetSyncResults();
+}
+
+syncExactBtn.addEventListener('click', async () => {
+  const p = await window.api.browseFolder(syncExactDest || syncDestSelect.value || undefined);
+  if (p) setSyncExactDest(p);
+});
+
+syncExactClear.addEventListener('click', () => setSyncExactDest(''));
+
 function syncEffectiveDest(): string {
+  if (syncExactDest) return syncExactDest;
   const base = syncDestSelect.value;
   if (!base || !syncSource) return base;
   const folderName = syncSource.split('/').pop() ?? syncSource;
@@ -1583,14 +1607,14 @@ function syncEffectiveDest(): string {
 function updateSyncDestHint() {
   const hint = document.getElementById('sync-dest-hint')!;
   const transferHint = document.getElementById('sync-transfer-hint')!;
-  if (!syncSource || !syncDestSelect.value) {
+  const dest = syncEffectiveDest();
+  if (!syncSource || !dest) {
     hint.textContent = '';
     transferHint.textContent = '';
     return;
   }
-  const dest = syncEffectiveDest();
   const short = dest.split('/').slice(-2).join('/');
-  hint.textContent = `→ ${short}/`;
+  hint.textContent = syncExactDest ? `→ ${short}/ (exact)` : `→ ${short}/`;
   transferHint.textContent = `Will sync to ${dest}`;
 }
 
@@ -1600,7 +1624,7 @@ function setSyncSource(p: string) {
   syncSourceLabel.classList.remove('text-neutral-400');
   syncSourceLabel.classList.add('text-neutral-200');
   window.api.setSetting('syncSource', p);
-  syncScanBtn.disabled = !syncSource || !syncDestSelect.value;
+  syncScanBtn.disabled = !syncSource || !syncEffectiveDest();
   updateSyncDestHint();
 }
 
@@ -1608,13 +1632,15 @@ function populateSyncDests() {
   syncDestSelect.innerHTML = transferDests.length
     ? transferDests.map((d) => `<option value="${escapeHtml(d)}">${escapeHtml(d.split('/').pop() ?? d)}</option>`).join('')
     : '<option value="">No destinations — open Settings</option>';
-  syncScanBtn.disabled = !syncSource || !syncDestSelect.value;
+  syncScanBtn.disabled = !syncSource || !syncEffectiveDest();
   updateSyncDestHint();
 }
 
 async function loadSyncPaths() {
   const src = await window.api.getSetting('syncSource');
   if (src) setSyncSource(src);
+  const exact = await window.api.getSetting('syncExactDest');
+  if (exact) setSyncExactDest(exact);
   populateSyncDests();
 }
 
@@ -1650,7 +1676,8 @@ document.getElementById('sync-browse-dest')!.addEventListener('click', async () 
 });
 
 syncDestSelect.addEventListener('change', () => {
-  syncScanBtn.disabled = !syncSource || !syncDestSelect.value;
+  setSyncExactDest('');
+  syncScanBtn.disabled = !syncSource || !syncEffectiveDest();
   updateSyncDestHint();
   resetSyncResults();
 });
@@ -1730,7 +1757,7 @@ syncDiffList.addEventListener('click', (e) => {
 });
 
 syncScanBtn.addEventListener('click', async () => {
-  if (!syncSource || !syncDestSelect.value) return;
+  if (!syncSource || !syncEffectiveDest()) return;
 
   syncScanBtn.disabled = true;
   syncStatus.textContent = 'Scanning...';
@@ -1767,7 +1794,7 @@ syncScanBtn.addEventListener('click', async () => {
 });
 
 syncTransferBtn.addEventListener('click', async () => {
-  if ((!syncFilesToTransfer.length && !syncTagUpdates.length) || !syncDestSelect.value) return;
+  if ((!syncFilesToTransfer.length && !syncTagUpdates.length) || !syncEffectiveDest()) return;
 
   syncTransferBtn.disabled = true;
   syncScanBtn.disabled = true;
