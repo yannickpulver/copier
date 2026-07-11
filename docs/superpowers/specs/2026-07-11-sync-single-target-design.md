@@ -19,7 +19,7 @@ Two fields for one concept ("where do files end up") is confusing, and the dropd
 Replace both controls with a single row:
 
 - The existing dropdown of saved destinations stays, the **+ browse** button stays, and the **whole row becomes a drop zone** (same interaction pattern as the source row).
-- A dropped or browsed folder becomes the selected value. If it isn't in the saved `transferDests` list, it appears as a **transient option** — selectable this session, never written to `transferDests`.
+- A **dropped** folder becomes the selected value; if it isn't in the saved `transferDests` list, it appears as a **transient option** — selectable this session, never written to `transferDests`. The **+ browse** button keeps its existing role: it adds the picked folder to the saved `transferDests` list and selects it.
 - The "Exact folder…" row, the `syncExactDest` setting, and its clear button are removed.
 
 ### Target resolution (smart rule)
