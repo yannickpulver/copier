@@ -40,7 +40,7 @@ One "Sync" button (as today):
 
 1. Copies **Missing** files preserving source-relative structure.
 2. Copies **Different** files to their own source-relative path — never to `destRelPath`. `destRelPath` is display-only info about where the same-name candidate that caused the "different" verdict lives; a same-name file matched elsewhere in target is never overwritten, since two differently-sized source files sharing a name (e.g. `A/a.jpg` and `B/a.jpg`) would otherwise flip that one target file back and forth across syncs and never converge.
-3. Applies tag merges for the **Tags** bucket.
+3. Applies tag merges for the **Tags** bucket (present pairs), plus source tags for files just copied under steps 1–2, since `fs.copyFile` drops extended attributes — otherwise a tagged missing/different file arrives untagged and needs a second sync pass.
 
 Cancel and progress behavior unchanged.
 

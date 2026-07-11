@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseXattrDump, decodeTags, tagName, mergeTags, computeTagUpdates } from './tags';
+import { parseXattrDump, decodeTags, tagName, mergeTags, computeTagUpdates, computeCopyTagUpdates } from './tags';
 import { SyncFileInfo } from './sync';
 
 // Real binary plist for ["Red\n6", "Holiday"] (generated with plutil -convert binary1)
@@ -109,5 +109,48 @@ describe('computeTagUpdates', () => {
     );
     expect(updates[0].tags).toEqual(['Trip', 'Own', 'Red\n6']);
     expect(updates[0].addedNames).toEqual(['Red']);
+  });
+});
+
+describe('computeCopyTagUpdates', () => {
+  const srcFile = (relPath: string): SyncFileInfo => ({
+    relPath,
+    fullPath: `/src/${relPath}`,
+    name: relPath.split('/').pop()!,
+    size: 1,
+    mtime: 0,
+  });
+
+  it('tagged missing file: update targets destRoot/relPath with source tags', () => {
+    const files = [srcFile('B/a.jpg')];
+    const srcTags = new Map([['/src/B/a.jpg', ['Red\n6', 'Holiday']]]);
+    const updates = computeCopyTagUpdates(files, srcTags, new Map(), '/dst');
+    expect(updates).toEqual([
+      { destPath: '/dst/B/a.jpg', relPath: 'B/a.jpg', tags: ['Red\n6', 'Holiday'], addedNames: ['Red', 'Holiday'] },
+    ]);
+  });
+
+  it('untagged file produces no update', () => {
+    const files = [srcFile('a.jpg')];
+    const updates = computeCopyTagUpdates(files, new Map(), new Map(), '/dst');
+    expect(updates).toEqual([]);
+  });
+
+  it('different file whose dest path already had tags at scan time: union merge, dest tags first', () => {
+    const files = [srcFile('a.jpg')]; // identical-relPath overwrite case
+    const srcTags = new Map([['/src/a.jpg', ['Red\n6', 'Trip']]]);
+    const destTags = new Map([['/dst/a.jpg', ['Own']]]);
+    const updates = computeCopyTagUpdates(files, srcTags, destTags, '/dst');
+    expect(updates).toEqual([
+      { destPath: '/dst/a.jpg', relPath: 'a.jpg', tags: ['Own', 'Red\n6', 'Trip'], addedNames: ['Red', 'Trip'] },
+    ]);
+  });
+
+  it('no update when source tags are all already present at the dest path', () => {
+    const files = [srcFile('a.jpg')];
+    const srcTags = new Map([['/src/a.jpg', ['Red\n6']]]);
+    const destTags = new Map([['/dst/a.jpg', ['Red\n6', 'Own']]]);
+    const updates = computeCopyTagUpdates(files, srcTags, destTags, '/dst');
+    expect(updates).toEqual([]);
   });
 });

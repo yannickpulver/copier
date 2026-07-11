@@ -1,8 +1,9 @@
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import * as path from 'node:path';
 import plist from 'plist';
 import bplist from 'bplist-parser';
-import { MatchedPair } from './sync';
+import { MatchedPair, SyncFileInfo } from './sync';
 
 const execFileP = promisify(execFile);
 
@@ -60,6 +61,25 @@ export function mergeTags(sourceTags: string[], targetTags: string[]): string[] 
   return toAdd.length ? [...targetTags, ...toAdd] : null;
 }
 
+/** Build a TagUpdate for one file, or null if the source has nothing new to add. */
+function buildTagUpdate(
+  destPath: string,
+  relPath: string,
+  source: string[] | undefined,
+  target: string[],
+): TagUpdate | null {
+  if (!source || source.length === 0) return null;
+  const merged = mergeTags(source, target);
+  if (!merged) return null;
+  const targetNames = new Set(target.map(tagName));
+  return {
+    destPath,
+    relPath,
+    tags: merged,
+    addedNames: source.map(tagName).filter((n) => !targetNames.has(n)),
+  };
+}
+
 export function computeTagUpdates(
   pairs: MatchedPair[],
   srcTags: Map<string, string[]>,
@@ -67,18 +87,35 @@ export function computeTagUpdates(
 ): TagUpdate[] {
   const updates: TagUpdate[] = [];
   for (const { src, dest } of pairs) {
-    const source = srcTags.get(src.fullPath);
-    if (!source || source.length === 0) continue;
-    const target = destTags.get(dest.fullPath) ?? [];
-    const merged = mergeTags(source, target);
-    if (!merged) continue;
-    const targetNames = new Set(target.map(tagName));
-    updates.push({
-      destPath: dest.fullPath,
-      relPath: src.relPath,
-      tags: merged,
-      addedNames: source.map(tagName).filter((n) => !targetNames.has(n)),
-    });
+    const update = buildTagUpdate(
+      dest.fullPath,
+      src.relPath,
+      srcTags.get(src.fullPath),
+      destTags.get(dest.fullPath) ?? [],
+    );
+    if (update) updates.push(update);
+  }
+  return updates;
+}
+
+/** Tag updates for files about to be copied: their dest copy starts untagged (copyFile drops
+ *  xattrs), so merge source tags with whatever the dest path already had at scan time. */
+export function computeCopyTagUpdates(
+  files: SyncFileInfo[],
+  srcTags: Map<string, string[]>,
+  destTags: Map<string, string[]>,
+  destRoot: string,
+): TagUpdate[] {
+  const updates: TagUpdate[] = [];
+  for (const f of files) {
+    const destPath = path.join(destRoot, f.relPath);
+    const update = buildTagUpdate(
+      destPath,
+      f.relPath,
+      srcTags.get(f.fullPath),
+      destTags.get(destPath) ?? [],
+    );
+    if (update) updates.push(update);
   }
   return updates;
 }

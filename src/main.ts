@@ -11,7 +11,7 @@ import { loadSynologyConfig, resolveOpReference } from './lib/credentials';
 import { enrichMetadata } from './lib/metadata';
 import { copyFiles, copyFilesGroupedByDate, checkDiskSpace } from './lib/transfer';
 import { walkFolder, diffFolders, syncFiles } from './lib/sync';
-import { readTagsRecursive, computeTagUpdates, writeTags, TagUpdate } from './lib/tags';
+import { readTagsRecursive, computeTagUpdates, computeCopyTagUpdates, writeTags, TagUpdate } from './lib/tags';
 import type { SynologyConfig, FileInfo } from './lib/types';
 import { getSetting, setSetting } from './lib/store';
 
@@ -530,7 +530,10 @@ ipcMain.handle('sync-scan', async (_event, sourcePath: string, destPath: string)
     readTagsRecursive(sourcePath),
     readTagsRecursive(destPath),
   ]);
-  const tagUpdates = computeTagUpdates(diff.present, srcTags, destTags);
+  const tagUpdates = [
+    ...computeTagUpdates(diff.present, srcTags, destTags),
+    ...computeCopyTagUpdates([...diff.missing, ...diff.different], srcTags, destTags, destPath),
+  ];
 
   return {
     missing: diff.missing,
