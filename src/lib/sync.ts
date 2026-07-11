@@ -10,10 +10,15 @@ export interface SyncFileInfo {
   destRelPath?: string; // set when dest file lives at a different path
 }
 
+export interface MatchedPair {
+  src: SyncFileInfo;
+  dest: SyncFileInfo;
+}
+
 export interface SyncDiff {
-  added: SyncFileInfo[];   // in source but not in dest
-  changed: SyncFileInfo[]; // in both but different size or newer mtime
-  unchanged: number;
+  missing: SyncFileInfo[];   // no file with same name anywhere in dest
+  different: SyncFileInfo[]; // same name exists but no size match
+  present: MatchedPair[];    // name+size match anywhere in dest
 }
 
 /** Recursively walk a directory and collect files. */
@@ -56,7 +61,8 @@ export async function walkFolder(
   return results;
 }
 
-/** Compare source files against dest files, matching by filename across any subfolder depth. */
+/** Compare source files against dest files by filename across any subfolder depth.
+ *  Present = same name + same size anywhere in dest. Mtime is ignored. */
 export function diffFolders(
   sourceFiles: SyncFileInfo[],
   destFiles: SyncFileInfo[],
@@ -69,32 +75,31 @@ export function diffFolders(
     else destByName.set(f.name, [f]);
   }
 
-  const added: SyncFileInfo[] = [];
-  const changed: SyncFileInfo[] = [];
-  let unchanged = 0;
+  const missing: SyncFileInfo[] = [];
+  const different: SyncFileInfo[] = [];
+  const present: MatchedPair[] = [];
 
   for (const src of sourceFiles) {
     const candidates = destByName.get(src.name);
     if (!candidates || candidates.length === 0) {
-      added.push(src);
+      missing.push(src);
       continue;
     }
 
-    // Prefer exact relPath match, then any match by name+size
-    const exactPath = candidates.find((d) => d.relPath === src.relPath);
-    const sameSize = candidates.find((d) => d.size === src.size);
-    const dest = exactPath ?? sameSize ?? candidates[0];
-
-    if (src.size !== dest.size || src.mtime > dest.mtime + 1000) {
-      changed.push(dest.relPath !== src.relPath
+    const sameSize = candidates.filter((d) => d.size === src.size);
+    if (sameSize.length === 0) {
+      const dest = candidates.find((d) => d.relPath === src.relPath) ?? candidates[0];
+      different.push(dest.relPath !== src.relPath
         ? { ...src, destRelPath: dest.relPath }
         : src);
-    } else {
-      unchanged++;
+      continue;
     }
+
+    const dest = sameSize.find((d) => d.relPath === src.relPath) ?? sameSize[0];
+    present.push({ src, dest });
   }
 
-  return { added, changed, unchanged };
+  return { missing, different, present };
 }
 
 /** Copy sync diff files from source to dest, preserving directory structure. */

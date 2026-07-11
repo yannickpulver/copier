@@ -524,9 +524,9 @@ ipcMain.handle('sync-scan', async (_event, sourcePath: string, destPath: string)
 
   const diff = diffFolders(sourceFiles, destFiles);
   return {
-    added: diff.added,
-    changed: diff.changed,
-    unchanged: diff.unchanged,
+    missing: diff.missing,
+    different: diff.different,
+    presentCount: diff.present.length,
     sourceTotal: sourceFiles.length,
     destTotal: destFiles.length,
   };

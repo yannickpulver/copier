@@ -38,9 +38,9 @@ declare global {
       onTransferProgress: (cb: (data: { current: number; total: number; name: string }) => void) => () => void;
       // Folder Sync
       syncScan: (sourcePath: string, destPath: string) => Promise<{
-        added: { relPath: string; fullPath: string; name: string; size: number; mtime: number }[];
-        changed: { relPath: string; fullPath: string; name: string; size: number; mtime: number }[];
-        unchanged: number;
+        missing: any[];
+        different: any[];
+        presentCount: number;
         sourceTotal: number;
         destTotal: number;
       }>;
@@ -1674,6 +1674,35 @@ function resetSyncResults() {
   syncStatus.textContent = '';
 }
 
+function renderSyncBucket(title: string, colorClass: string, files: any[]): string {
+  if (!files.length) return '';
+  return `
+    <details open class="border border-neutral-700 rounded-md overflow-hidden mt-1">
+      <summary class="flex items-center gap-3 px-3 py-2 bg-neutral-800/50 hover:bg-neutral-800 cursor-pointer text-xs">
+        <span class="font-medium ${colorClass}">${title}</span>
+        <span class="text-neutral-500">${files.length} file${files.length > 1 ? 's' : ''}</span>
+        <span class="text-neutral-500 ml-auto">${formatSize(files.reduce((s, f) => s + f.size, 0))}</span>
+      </summary>
+      <table class="w-full text-xs">
+        <tbody class="divide-y divide-neutral-800">
+          ${files.map((f) => `
+            <tr class="hover:bg-neutral-800/50 cursor-pointer" data-path="${escapeHtml(f.fullPath)}">
+              <td class="px-3 py-1.5 truncate max-w-xs">${escapeHtml(f.relPath)}</td>
+              <td class="px-3 py-1.5 text-right text-neutral-400 w-20 whitespace-nowrap">${formatSize(f.size)}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </details>
+  `;
+}
+
+// Click-to-reveal for all sync result rows (bound once, not per scan)
+syncDiffList.addEventListener('click', (e) => {
+  const row = (e.target as HTMLElement).closest('tr');
+  if (row?.dataset.path) window.api.revealFile(row.dataset.path);
+});
+
 syncScanBtn.addEventListener('click', async () => {
   if (!syncSource || !syncDestSelect.value) return;
 
@@ -1683,10 +1712,10 @@ syncScanBtn.addEventListener('click', async () => {
 
   try {
     const result = await window.api.syncScan(syncSource, syncEffectiveDest());
-    const allDiff = [...result.added, ...result.changed];
+    const allDiff = [...result.missing, ...result.different];
     syncFilesToTransfer = allDiff;
 
-    syncStatus.textContent = `${result.sourceTotal} source, ${result.destTotal} dest — ${result.added.length} new, ${result.changed.length} changed, ${result.unchanged} unchanged`;
+    syncStatus.textContent = `${result.sourceTotal} source, ${result.destTotal} target — ${result.missing.length} missing, ${result.different.length} different, ${result.presentCount} present`;
 
     if (allDiff.length === 0) {
       syncAllSynced.classList.remove('hidden');
@@ -1694,58 +1723,9 @@ syncScanBtn.addEventListener('click', async () => {
       syncResults.classList.remove('hidden');
       syncTransferSection.classList.remove('hidden');
       syncTransferBtn.textContent = `Sync ${allDiff.length} files`;
-
-      // Render added files
-      let html = '';
-      if (result.added.length > 0) {
-        html += `
-          <details open class="border border-neutral-700 rounded-md overflow-hidden">
-            <summary class="flex items-center gap-3 px-3 py-2 bg-neutral-800/50 hover:bg-neutral-800 cursor-pointer text-xs">
-              <span class="font-medium text-green-400">New</span>
-              <span class="text-neutral-500">${result.added.length} file${result.added.length > 1 ? 's' : ''}</span>
-              <span class="text-neutral-500 ml-auto">${formatSize(result.added.reduce((s, f) => s + f.size, 0))}</span>
-            </summary>
-            <table class="w-full text-xs">
-              <tbody class="divide-y divide-neutral-800">
-                ${result.added.map((f) => `
-                  <tr class="hover:bg-neutral-800/50 cursor-pointer" data-path="${escapeHtml(f.fullPath)}">
-                    <td class="px-3 py-1.5 truncate max-w-xs">${escapeHtml(f.relPath)}</td>
-                    <td class="px-3 py-1.5 text-right text-neutral-400 w-20 whitespace-nowrap">${formatSize(f.size)}</td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
-          </details>
-        `;
-      }
-      if (result.changed.length > 0) {
-        html += `
-          <details open class="border border-neutral-700 rounded-md overflow-hidden mt-1">
-            <summary class="flex items-center gap-3 px-3 py-2 bg-neutral-800/50 hover:bg-neutral-800 cursor-pointer text-xs">
-              <span class="font-medium text-yellow-400">Changed</span>
-              <span class="text-neutral-500">${result.changed.length} file${result.changed.length > 1 ? 's' : ''}</span>
-              <span class="text-neutral-500 ml-auto">${formatSize(result.changed.reduce((s, f) => s + f.size, 0))}</span>
-            </summary>
-            <table class="w-full text-xs">
-              <tbody class="divide-y divide-neutral-800">
-                ${result.changed.map((f) => `
-                  <tr class="hover:bg-neutral-800/50 cursor-pointer" data-path="${escapeHtml(f.fullPath)}">
-                    <td class="px-3 py-1.5 truncate max-w-xs">${escapeHtml(f.relPath)}</td>
-                    <td class="px-3 py-1.5 text-right text-neutral-400 w-20 whitespace-nowrap">${formatSize(f.size)}</td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
-          </details>
-        `;
-      }
-      syncDiffList.innerHTML = html;
-
-      // Click to reveal
-      syncDiffList.addEventListener('click', (e) => {
-        const row = (e.target as HTMLElement).closest('tr');
-        if (row?.dataset.path) window.api.revealFile(row.dataset.path);
-      });
+      syncDiffList.innerHTML =
+        renderSyncBucket('Missing', 'text-red-400', result.missing) +
+        renderSyncBucket('Different', 'text-yellow-400', result.different);
     }
   } catch (e: any) {
     syncStatus.textContent = `Error: ${e.message}`;
