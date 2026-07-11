@@ -29,8 +29,8 @@ Apple Silicon only.
 ## Setup
 
 ```bash
-npm install
-npm start
+pnpm install
+pnpm start
 ```
 
 Click the ⚙ gear icon to configure:
@@ -41,7 +41,7 @@ Click the ⚙ gear icon to configure:
 ## Build
 
 ```bash
-npm run make
+pnpm run make
 ```
 
 Outputs to `out/make/`.

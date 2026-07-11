@@ -21,12 +21,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
+          cache: pnpm
 
-      - run: npm ci
+      - run: pnpm install --frozen-lockfile
 
       - name: Set version from VERSION file
         run: npm version $(cat VERSION | tr -d '[:space:]') --no-git-tag-version --allow-same-version
@@ -45,7 +47,7 @@ jobs:
           rm certificate.p12
 
       - name: Make
-        run: npm run make
+        run: pnpm run make
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
@@ -62,18 +64,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
+          cache: pnpm
 
-      - run: npm ci
+      - run: pnpm install --frozen-lockfile
 
       - name: Set version from VERSION file
         run: npm version $(cat VERSION | tr -d '[:space:]') --no-git-tag-version --allow-same-version
 
       - name: Make
-        run: npm run make
+        run: pnpm run make
 
       - uses: actions/upload-artifact@v4
         with:
@@ -86,12 +90,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
+          cache: pnpm
 
-      - run: npm ci
+      - run: pnpm install --frozen-lockfile
 
       - name: Set version from VERSION file
         run: |
@@ -99,7 +105,7 @@ jobs:
           npm version $version --no-git-tag-version --allow-same-version
 
       - name: Make
-        run: npm run make
+        run: pnpm run make
 
       - uses: actions/upload-artifact@v4
         with:
