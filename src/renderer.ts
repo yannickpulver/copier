@@ -2,6 +2,7 @@ import './index.css';
 import { OverlayScrollbars } from 'overlayscrollbars';
 import 'overlayscrollbars/overlayscrollbars.css';
 import { formatFolderDate, DEFAULT_DATE_FORMAT } from './lib/dateFormat';
+import { resolveSyncTarget } from './lib/syncTarget';
 
 let folderDateFormat = DEFAULT_DATE_FORMAT;
 
@@ -1570,59 +1571,45 @@ let syncSource = '';
 let syncFilesToTransfer: any[] = [];
 let syncTagUpdates: any[] = [];
 
-let syncExactDest = '';
-const syncExactBtn = document.getElementById('sync-exact-btn')!;
-const syncExactLabel = document.getElementById('sync-exact-label')!;
-const syncExactClear = document.getElementById('sync-exact-clear')!;
-const syncExactDrop = document.getElementById('sync-exact-drop')!;
+let syncTargetExact = false;
+const syncDestDrop = document.getElementById('sync-dest-drop')!;
+const TRANSIENT_OPT_CLASS = 'sync-transient-opt';
 
-function setSyncExactDest(p: string) {
-  syncExactDest = p;
-  window.api.setSetting('syncExactDest', p);
-  syncExactLabel.textContent = p || 'or drop folder';
-  syncExactLabel.classList.toggle('text-blue-400', !!p);
-  syncExactLabel.classList.toggle('text-neutral-500', !p);
-  syncExactClear.classList.toggle('hidden', !p);
+function currentSyncTarget(): string {
+  return syncDestSelect.value;
+}
+
+function persistSyncTarget() {
+  window.api.setSetting('syncTarget', currentSyncTarget());
+  window.api.setSetting('syncTargetExact', syncTargetExact);
+}
+
+/** Select a target path, adding it as a transient (non-persisted) option if it isn't a saved destination. */
+function setSyncTarget(p: string, exact: boolean) {
+  if (!transferDests.includes(p)) {
+    syncDestSelect.querySelector(`.${TRANSIENT_OPT_CLASS}`)?.remove();
+    const opt = document.createElement('option');
+    opt.value = p;
+    opt.textContent = p.split('/').pop() ?? p;
+    opt.className = TRANSIENT_OPT_CLASS;
+    syncDestSelect.appendChild(opt);
+  }
+  syncDestSelect.value = p;
+  syncTargetExact = exact;
+  persistSyncTarget();
   syncScanBtn.disabled = !syncSource || !syncEffectiveDest();
   updateSyncDestHint();
   resetSyncResults();
 }
 
-syncExactDrop.addEventListener('dragover', (e) => {
-  e.preventDefault();
-  syncExactDrop.classList.replace('border-neutral-800', 'border-blue-500');
-});
-syncExactDrop.addEventListener('dragleave', () => {
-  syncExactDrop.classList.replace('border-blue-500', 'border-neutral-800');
-});
-syncExactDrop.addEventListener('drop', (e) => {
-  e.preventDefault();
-  syncExactDrop.classList.replace('border-blue-500', 'border-neutral-800');
-  const file = e.dataTransfer?.files[0];
-  if (file) setSyncExactDest(window.api.getPathForFile(file));
-});
-
-syncExactBtn.addEventListener('click', async () => {
-  const p = await window.api.browseFolder(syncExactDest || syncDestSelect.value || undefined);
-  if (p) setSyncExactDest(p);
-});
-
-syncExactClear.addEventListener('click', () => setSyncExactDest(''));
-
 function syncEffectiveDest(): string {
-  if (syncExactDest) return syncExactDest;
-  const base = syncDestSelect.value;
-  if (!base || !syncSource) return base;
-  const folderName = syncSource.split('/').pop() ?? syncSource;
-  const destFolderName = base.split('/').pop() ?? '';
-  // If dest already ends with the source folder name, use it directly
-  if (destFolderName === folderName) return base;
-  return `${base}/${folderName}`;
+  return resolveSyncTarget(syncSource, currentSyncTarget(), syncTargetExact);
 }
 
 function updateSyncDestHint() {
   const hint = document.getElementById('sync-dest-hint')!;
   const transferHint = document.getElementById('sync-transfer-hint')!;
+  const target = currentSyncTarget();
   const dest = syncEffectiveDest();
   if (!syncSource || !dest) {
     hint.textContent = '';
@@ -1630,8 +1617,24 @@ function updateSyncDestHint() {
     return;
   }
   const short = dest.split('/').slice(-2).join('/');
-  hint.textContent = syncExactDest ? `→ ${short}/ (exact)` : `→ ${short}/`;
-  transferHint.textContent = `Will sync to ${dest}`;
+  const srcName = syncSource.replace(/\/+$/, '').split('/').pop() ?? '';
+  const targetName = target.replace(/\/+$/, '').split('/').pop() ?? '';
+  const namesDiffer = !!srcName && !!targetName && srcName !== targetName;
+  if (!namesDiffer) {
+    hint.textContent = `→ ${short}/`;
+  } else {
+    const linkLabel = syncTargetExact
+      ? 'sync into subfolder instead'
+      : `sync into ${targetName} directly`;
+    hint.innerHTML = `→ ${escapeHtml(short)}/${syncTargetExact ? ' (exact)' : ''} · <button id="sync-exact-toggle" class="underline text-blue-400 hover:text-blue-300">${escapeHtml(linkLabel)}</button>`;
+    document.getElementById('sync-exact-toggle')!.addEventListener('click', () => {
+      syncTargetExact = !syncTargetExact;
+      persistSyncTarget();
+      updateSyncDestHint();
+      resetSyncResults();
+    });
+  }
+  transferHint.textContent = `Will sync to ${syncEffectiveDest()}`;
 }
 
 function setSyncSource(p: string) {
@@ -1645,9 +1648,14 @@ function setSyncSource(p: string) {
 }
 
 function populateSyncDests() {
+  const prev = syncDestSelect.value;
   syncDestSelect.innerHTML = transferDests.length
     ? transferDests.map((d) => `<option value="${escapeHtml(d)}">${escapeHtml(d.split('/').pop() ?? d)}</option>`).join('')
     : '<option value="">No destinations — open Settings</option>';
+  if (prev && !transferDests.includes(prev)) {
+    setSyncTarget(prev, syncTargetExact);
+    return;
+  }
   syncScanBtn.disabled = !syncSource || !syncEffectiveDest();
   updateSyncDestHint();
 }
@@ -1655,9 +1663,19 @@ function populateSyncDests() {
 async function loadSyncPaths() {
   const src = await window.api.getSetting('syncSource');
   if (src) setSyncSource(src);
-  const exact = await window.api.getSetting('syncExactDest');
-  if (exact) setSyncExactDest(exact);
   populateSyncDests();
+  const [target, exact, legacyExact] = await Promise.all([
+    window.api.getSetting('syncTarget'),
+    window.api.getSetting('syncTargetExact'),
+    window.api.getSetting('syncExactDest'),
+  ]);
+  if (legacyExact && !target) {
+    // one-time migration from the removed "Exact folder…" row
+    setSyncTarget(legacyExact, true);
+    window.api.setSetting('syncExactDest', undefined);
+  } else if (target) {
+    setSyncTarget(target, !!exact);
+  }
 }
 
 // Drag & drop for source
@@ -1680,19 +1698,37 @@ document.getElementById('sync-browse-source')!.addEventListener('click', async (
   if (p) setSyncSource(p);
 });
 
+// Drag & drop for target (transient — not added to saved destinations)
+syncDestDrop.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  syncDestDrop.classList.replace('border-neutral-700', 'border-blue-500');
+});
+syncDestDrop.addEventListener('dragleave', () => {
+  syncDestDrop.classList.replace('border-blue-500', 'border-neutral-700');
+});
+syncDestDrop.addEventListener('drop', (e) => {
+  e.preventDefault();
+  syncDestDrop.classList.replace('border-blue-500', 'border-neutral-700');
+  const file = e.dataTransfer?.files[0];
+  if (file) setSyncTarget(window.api.getPathForFile(file), false);
+});
+
+// + button: add a saved destination (shared transferDests list), then select it
 document.getElementById('sync-browse-dest')!.addEventListener('click', async () => {
-  const p = await window.api.browseFolder(syncDestSelect.value || undefined);
-  if (p && !transferDests.includes(p)) {
+  const p = await window.api.browseFolder(currentSyncTarget() || undefined);
+  if (!p) return;
+  if (!transferDests.includes(p)) {
     transferDests.push(p);
     window.api.setSetting('transferDests', transferDests);
     populateSyncDests();
     populateTransferDests();
-    syncDestSelect.value = p;
   }
+  setSyncTarget(p, false);
 });
 
 syncDestSelect.addEventListener('change', () => {
-  setSyncExactDest('');
+  syncTargetExact = false;
+  persistSyncTarget();
   syncScanBtn.disabled = !syncSource || !syncEffectiveDest();
   updateSyncDestHint();
   resetSyncResults();
