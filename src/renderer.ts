@@ -1658,7 +1658,7 @@ function updateSyncDestHint() {
     transferHint.textContent = '';
     return;
   }
-  hint.textContent = `→ ${dest.split('/').slice(-2).join('/')}/`;
+  hint.textContent = `→ ${syncAppendCheckbox.checked ? dest : dest.split('/').slice(-2).join('/')}/`;
   transferHint.textContent = `Will sync to ${dest}`;
 }
 
