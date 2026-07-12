@@ -25,6 +25,15 @@
     "url": "https://github.com/yannickpulver/copier"
   },
   "license": "MIT",
+  "pnpm": {
+    "packageExtensions": {
+      "electron-winstaller": {
+        "dependencies": {
+          "lodash": "^4.17.21"
+        }
+      }
+    }
+  },
   "devDependencies": {
     "@electron-forge/cli": "^7.11.1",
     "@electron-forge/maker-deb": "^7.11.1",
