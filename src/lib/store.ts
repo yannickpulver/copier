@@ -15,9 +15,10 @@ interface AppSettings {
   synologyFolders?: string;
   dateFormat?: string;
   syncSource?: string;
-  syncExactDest?: string; // legacy — migrated to syncTarget/syncTargetExact on load
+  syncExactDest?: string; // legacy — migrated to syncAppendSourceName on load
   syncTarget?: string;
-  syncTargetExact?: boolean;
+  syncTargetExact?: boolean; // legacy — migrated to syncAppendSourceName on load
+  syncAppendSourceName?: boolean;
 }
 
 // Secrets are encrypted at rest via the OS keychain (safeStorage). Legacy
