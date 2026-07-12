@@ -289,12 +289,12 @@
           </div>
         </div>
 
-        <!-- Dest folder (from transfer destinations) -->
+        <!-- Target folder (dropdown + drag & drop + browse) -->
         <div class="space-y-1">
-          <div class="text-[10px] uppercase tracking-wider text-neutral-500">Destination</div>
-          <div class="flex items-center gap-2">
+          <div class="text-[10px] uppercase tracking-wider text-neutral-500">Target</div>
+          <div id="sync-dest-drop" class="flex items-center gap-2 border-2 border-dashed border-neutral-700 rounded-md px-2 py-1.5 transition-colors">
             <select id="sync-dest-select" class="flex-1 bg-neutral-800 border border-neutral-700 rounded px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500"></select>
-            <button id="sync-browse-dest" class="px-2 py-1.5 bg-neutral-700 hover:bg-neutral-600 rounded text-xs transition-colors shrink-0">+</button>
+            <button id="sync-browse-dest" class="px-2 py-1 bg-neutral-700 hover:bg-neutral-600 rounded text-xs transition-colors shrink-0">+</button>
           </div>
           <div id="sync-dest-hint" class="text-[10px] text-neutral-500"></div>
         </div>
@@ -310,7 +310,7 @@
         <!-- All synced message -->
         <div id="sync-all-synced" class="hidden flex-1 flex flex-col items-center justify-center text-center gap-3 opacity-70">
           <span class="text-3xl">&#10003;</span>
-          <span class="text-sm text-neutral-300">Folders are in sync</span>
+          <span class="text-sm text-neutral-300">All source files are present in the target</span>
         </div>
 
         <!-- Diff results -->

@@ -2,6 +2,7 @@ import './index.css';
 import { OverlayScrollbars } from 'overlayscrollbars';
 import 'overlayscrollbars/overlayscrollbars.css';
 import { formatFolderDate, DEFAULT_DATE_FORMAT } from './lib/dateFormat';
+import { resolveSyncTarget } from './lib/syncTarget';
 
 let folderDateFormat = DEFAULT_DATE_FORMAT;
 
@@ -21,7 +22,7 @@ declare global {
         backedUp: number;
         backedUpFiles?: { name: string; size: number; fullPath: string; captureDate?: string; isMedia?: boolean }[];
         missing: { name: string; size: number; fullPath: string; captureDate?: string; isMedia?: boolean }[];
-        suggestedFolders: { folder: string; count: number; source: string }[];
+        suggestedFolders: { folder: string; count: number; source: string; newestMtime: number }[];
         sources: { name: string; ok: boolean; error?: string }[];
       }>;
       listExistingFolders: (nasPath: string) => Promise<string[]>;
@@ -38,13 +39,14 @@ declare global {
       onTransferProgress: (cb: (data: { current: number; total: number; name: string }) => void) => () => void;
       // Folder Sync
       syncScan: (sourcePath: string, destPath: string) => Promise<{
-        added: { relPath: string; fullPath: string; name: string; size: number; mtime: number }[];
-        changed: { relPath: string; fullPath: string; name: string; size: number; mtime: number }[];
-        unchanged: number;
+        missing: any[];
+        different: any[];
+        tagUpdates: any[];
+        presentCount: number;
         sourceTotal: number;
         destTotal: number;
       }>;
-      syncTransfer: (files: any[], destRoot: string) => Promise<{ errors: string[]; cancelled: boolean }>;
+      syncTransfer: (files: any[], destRoot: string, tagUpdates: any[]) => Promise<{ errors: string[]; cancelled: boolean }>;
       cancelSync: () => Promise<void>;
       onSyncProgress: (cb: (data: { step: string; count: number; folder: string }) => void) => () => void;
       onSyncTransferProgress: (cb: (data: { current: number; total: number; name: string }) => void) => () => void;
@@ -810,7 +812,7 @@ async function runScan(skipCheck: boolean, sdPathOverride?: string) {
       const hasMapping = [...existingSelect.querySelectorAll<HTMLSelectElement>('.date-folder-select')]
         .some((s) => s.value !== '');
       // Files already backed up into an existing folder → suggest adding there.
-      const predictedFolder = predictExistingFolder(result.suggestedFolders, lastExistingFolders);
+      const predictedFolder = predictExistingFolder(result.suggestedFolders, lastExistingFolders, media);
       let suggestedMode: string;
       if (hasMapping) {
         suggestedMode = 'existing';
@@ -952,10 +954,39 @@ dateGroupsPreview.addEventListener('change', () => {
 
 // --- Transfer ---
 
-window.api.onTransferProgress(({ current, total }) => {
-  const pct = total > 0 ? (current / total) * 100 : 0;
+let transferSpeed: { t: number; bytes: number; rate: number } | null = null;
+
+function formatEta(seconds: number): string {
+  if (!isFinite(seconds) || seconds < 0) return '';
+  const s = Math.round(seconds);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
+window.api.onTransferProgress(({ current, total, bytesDone, bytesTotal }) => {
+  const pct = bytesTotal > 0
+    ? (bytesDone / bytesTotal) * 100
+    : (total > 0 ? (current / total) * 100 : 0);
   progressBar.style.width = `${pct}%`;
-  progressLabel.textContent = `${current}/${total}`;
+
+  const now = performance.now();
+  if (!transferSpeed) transferSpeed = { t: now, bytes: bytesDone ?? 0, rate: 0 };
+  const dt = (now - transferSpeed.t) / 1000;
+  if (dt >= 0.5 && bytesDone != null) {
+    const inst = (bytesDone - transferSpeed.bytes) / dt;
+    transferSpeed.rate = transferSpeed.rate > 0 ? transferSpeed.rate * 0.7 + inst * 0.3 : inst;
+    transferSpeed.t = now;
+    transferSpeed.bytes = bytesDone;
+  }
+
+  let label = `${current}/${total}`;
+  if (transferSpeed.rate > 0 && bytesTotal > 0) {
+    const eta = formatEta((bytesTotal - bytesDone) / transferSpeed.rate);
+    label += ` · ${formatSize(transferSpeed.rate)}/s${eta ? ` · ${eta} left` : ''}`;
+  }
+  progressLabel.textContent = label;
 });
 
 transferBtn.addEventListener('click', async () => {
@@ -1003,6 +1034,7 @@ transferBtn.addEventListener('click', async () => {
   cancelBtn.classList.remove('hidden');
   progressTrack.classList.remove('hidden');
   progressBar.style.width = '0%';
+  transferSpeed = null;
   transferInProgress = true;
 
   try {
@@ -1069,16 +1101,30 @@ function suggestTransferMode(
 }
 
 // Predict the destination folder for new files. If some SD files are already
-// backed up inside an existing destination folder (e.g. an ongoing "Scotland"
-// trip), the new ones most likely belong there too. Picks the most-used
-// suggested folder whose name also exists in the destination.
+// backed up inside an existing destination folder (e.g. an ongoing "Ireland"
+// trip), the new ones most likely belong there too. Ranks candidates by how
+// recently shot their matched files are (not by match count — an old trip
+// still on the card would outvote the current one forever), and only suggests
+// a folder whose newest matched file is close in time to the new files.
+const PREDICT_MAX_GAP_MS = 7 * 24 * 60 * 60 * 1000;
+
 function predictExistingFolder(
-  suggested: { folder: string; count: number }[],
+  suggested: { folder: string; count: number; newestMtime?: number }[],
   existingFolders: string[],
+  newFiles: { captureDate?: string; mtime?: number }[],
 ): string | null {
   const set = new Set(existingFolders);
-  const ranked = [...suggested].sort((a, b) => b.count - a.count);
+  const newestNewFile = Math.max(
+    0,
+    ...newFiles.map((f) => (f.captureDate ? Date.parse(f.captureDate) : f.mtime ?? 0)),
+  );
+  const ranked = [...suggested].sort(
+    (a, b) => (b.newestMtime ?? 0) - (a.newestMtime ?? 0) || b.count - a.count,
+  );
   for (const sf of ranked) {
+    // Stale project (its newest matched file is far older than what's being
+    // added now) — adding there is almost certainly wrong; prefer a new folder.
+    if (newestNewFile > 0 && (sf.newestMtime ?? 0) < newestNewFile - PREDICT_MAX_GAP_MS) continue;
     // Walk up the path and take the deepest segment that exists as a top-level
     // destination folder, so a camera subfolder (Scotland/DJI) resolves to
     // "Scotland" — the camera-subfolder option then re-adds the DJI level.
@@ -1267,7 +1313,7 @@ function formatTime(iso: string): string {
 }
 
 function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 // --- Settings panel ---
@@ -1567,29 +1613,72 @@ const syncProgressLabel = document.getElementById('sync-progress-label')!;
 
 let syncSource = '';
 let syncFilesToTransfer: any[] = [];
+let syncTagUpdates: any[] = [];
+
+let syncTargetExact = false;
+const syncDestDrop = document.getElementById('sync-dest-drop')!;
+const TRANSIENT_OPT_CLASS = 'sync-transient-opt';
+
+function currentSyncTarget(): string {
+  return syncDestSelect.value;
+}
+
+function persistSyncTarget() {
+  window.api.setSetting('syncTarget', currentSyncTarget());
+  window.api.setSetting('syncTargetExact', syncTargetExact);
+}
+
+/** Select a target path, adding it as a transient (non-persisted) option if it isn't a saved destination. */
+function setSyncTarget(p: string, exact: boolean) {
+  if (!transferDests.includes(p)) {
+    syncDestSelect.querySelector(`.${TRANSIENT_OPT_CLASS}`)?.remove();
+    const opt = document.createElement('option');
+    opt.value = p;
+    opt.textContent = p.split('/').pop() ?? p;
+    opt.className = TRANSIENT_OPT_CLASS;
+    syncDestSelect.appendChild(opt);
+  }
+  syncDestSelect.value = p;
+  syncTargetExact = exact;
+  persistSyncTarget();
+  syncScanBtn.disabled = !syncSource || !syncEffectiveDest();
+  updateSyncDestHint();
+  resetSyncResults();
+}
 
 function syncEffectiveDest(): string {
-  const base = syncDestSelect.value;
-  if (!base || !syncSource) return base;
-  const folderName = syncSource.split('/').pop() ?? syncSource;
-  const destFolderName = base.split('/').pop() ?? '';
-  // If dest already ends with the source folder name, use it directly
-  if (destFolderName === folderName) return base;
-  return `${base}/${folderName}`;
+  return resolveSyncTarget(syncSource, currentSyncTarget(), syncTargetExact);
 }
 
 function updateSyncDestHint() {
   const hint = document.getElementById('sync-dest-hint')!;
   const transferHint = document.getElementById('sync-transfer-hint')!;
-  if (!syncSource || !syncDestSelect.value) {
+  const target = currentSyncTarget();
+  const dest = syncEffectiveDest();
+  if (!syncSource || !dest) {
     hint.textContent = '';
     transferHint.textContent = '';
     return;
   }
-  const dest = syncEffectiveDest();
   const short = dest.split('/').slice(-2).join('/');
-  hint.textContent = `→ ${short}/`;
-  transferHint.textContent = `Will sync to ${dest}`;
+  const srcName = syncSource.replace(/\/+$/, '').split('/').pop() ?? '';
+  const targetName = target.replace(/\/+$/, '').split('/').pop() ?? '';
+  const namesDiffer = !!srcName && !!targetName && srcName !== targetName;
+  if (!namesDiffer) {
+    hint.textContent = `→ ${short}/`;
+  } else {
+    const linkLabel = syncTargetExact
+      ? 'sync into subfolder instead'
+      : `sync into ${targetName} directly`;
+    hint.innerHTML = `→ ${escapeHtml(short)}/${syncTargetExact ? ' (exact)' : ''} · <button id="sync-exact-toggle" class="underline text-blue-400 hover:text-blue-300">${escapeHtml(linkLabel)}</button>`;
+    document.getElementById('sync-exact-toggle')!.addEventListener('click', () => {
+      syncTargetExact = !syncTargetExact;
+      persistSyncTarget();
+      updateSyncDestHint();
+      resetSyncResults();
+    });
+  }
+  transferHint.textContent = `Will sync to ${syncEffectiveDest()}`;
 }
 
 function setSyncSource(p: string) {
@@ -1598,15 +1687,20 @@ function setSyncSource(p: string) {
   syncSourceLabel.classList.remove('text-neutral-400');
   syncSourceLabel.classList.add('text-neutral-200');
   window.api.setSetting('syncSource', p);
-  syncScanBtn.disabled = !syncSource || !syncDestSelect.value;
+  syncScanBtn.disabled = !syncSource || !syncEffectiveDest();
   updateSyncDestHint();
 }
 
 function populateSyncDests() {
+  const prev = syncDestSelect.value;
   syncDestSelect.innerHTML = transferDests.length
     ? transferDests.map((d) => `<option value="${escapeHtml(d)}">${escapeHtml(d.split('/').pop() ?? d)}</option>`).join('')
     : '<option value="">No destinations — open Settings</option>';
-  syncScanBtn.disabled = !syncSource || !syncDestSelect.value;
+  if (prev && !transferDests.includes(prev)) {
+    setSyncTarget(prev, syncTargetExact);
+    return;
+  }
+  syncScanBtn.disabled = !syncSource || !syncEffectiveDest();
   updateSyncDestHint();
 }
 
@@ -1614,6 +1708,18 @@ async function loadSyncPaths() {
   const src = await window.api.getSetting('syncSource');
   if (src) setSyncSource(src);
   populateSyncDests();
+  const [target, exact, legacyExact] = await Promise.all([
+    window.api.getSetting('syncTarget'),
+    window.api.getSetting('syncTargetExact'),
+    window.api.getSetting('syncExactDest'),
+  ]);
+  if (legacyExact && !target) {
+    // one-time migration from the removed "Exact folder…" row
+    setSyncTarget(legacyExact, true);
+    window.api.setSetting('syncExactDest', undefined);
+  } else if (target) {
+    setSyncTarget(target, !!exact);
+  }
 }
 
 // Drag & drop for source
@@ -1636,25 +1742,45 @@ document.getElementById('sync-browse-source')!.addEventListener('click', async (
   if (p) setSyncSource(p);
 });
 
+// Drag & drop for target (transient — not added to saved destinations)
+syncDestDrop.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  syncDestDrop.classList.replace('border-neutral-700', 'border-blue-500');
+});
+syncDestDrop.addEventListener('dragleave', () => {
+  syncDestDrop.classList.replace('border-blue-500', 'border-neutral-700');
+});
+syncDestDrop.addEventListener('drop', (e) => {
+  e.preventDefault();
+  syncDestDrop.classList.replace('border-blue-500', 'border-neutral-700');
+  const file = e.dataTransfer?.files[0];
+  if (file) setSyncTarget(window.api.getPathForFile(file), false);
+});
+
+// + button: add a saved destination (shared transferDests list), then select it
 document.getElementById('sync-browse-dest')!.addEventListener('click', async () => {
-  const p = await window.api.browseFolder(syncDestSelect.value || undefined);
-  if (p && !transferDests.includes(p)) {
+  const p = await window.api.browseFolder(currentSyncTarget() || undefined);
+  if (!p) return;
+  if (!transferDests.includes(p)) {
     transferDests.push(p);
     window.api.setSetting('transferDests', transferDests);
     populateSyncDests();
     populateTransferDests();
-    syncDestSelect.value = p;
   }
+  setSyncTarget(p, false);
 });
 
 syncDestSelect.addEventListener('change', () => {
-  syncScanBtn.disabled = !syncSource || !syncDestSelect.value;
+  syncTargetExact = false;
+  persistSyncTarget();
+  syncScanBtn.disabled = !syncSource || !syncEffectiveDest();
   updateSyncDestHint();
   resetSyncResults();
 });
 
 window.api.onSyncProgress(({ step, count, folder }) => {
-  syncStatus.textContent = `${step === 'source' ? 'Source' : 'Dest'}: ${count} files — ${folder}`;
+  const label = step === 'source' ? 'Source' : step === 'dest' ? 'Target' : 'Tags';
+  syncStatus.textContent = `${label}: ${count} files — ${folder}`;
 });
 
 window.api.onSyncTransferProgress(({ current, total }) => {
@@ -1665,6 +1791,7 @@ window.api.onSyncTransferProgress(({ current, total }) => {
 
 function resetSyncResults() {
   syncFilesToTransfer = [];
+  syncTagUpdates = [];
   syncDiffList.innerHTML = '';
   syncResults.classList.add('hidden');
   syncAllSynced.classList.add('hidden');
@@ -1674,8 +1801,59 @@ function resetSyncResults() {
   syncStatus.textContent = '';
 }
 
+function renderSyncBucket(title: string, colorClass: string, files: any[]): string {
+  if (!files.length) return '';
+  return `
+    <details open class="border border-neutral-700 rounded-md overflow-hidden mt-1">
+      <summary class="flex items-center gap-3 px-3 py-2 bg-neutral-800/50 hover:bg-neutral-800 cursor-pointer text-xs">
+        <span class="font-medium ${colorClass}">${title}</span>
+        <span class="text-neutral-500">${files.length} file${files.length > 1 ? 's' : ''}</span>
+        <span class="text-neutral-500 ml-auto">${formatSize(files.reduce((s, f) => s + f.size, 0))}</span>
+      </summary>
+      <table class="w-full text-xs">
+        <tbody class="divide-y divide-neutral-800">
+          ${files.map((f) => `
+            <tr class="hover:bg-neutral-800/50 cursor-pointer" data-path="${escapeHtml(f.fullPath)}">
+              <td class="px-3 py-1.5 truncate max-w-xs">${escapeHtml(f.relPath)}</td>
+              <td class="px-3 py-1.5 text-right text-neutral-400 w-20 whitespace-nowrap">${formatSize(f.size)}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </details>
+  `;
+}
+
+function renderTagBucket(updates: any[]): string {
+  if (!updates.length) return '';
+  return `
+    <details open class="border border-neutral-700 rounded-md overflow-hidden mt-1">
+      <summary class="flex items-center gap-3 px-3 py-2 bg-neutral-800/50 hover:bg-neutral-800 cursor-pointer text-xs">
+        <span class="font-medium text-blue-400">Tags</span>
+        <span class="text-neutral-500">${updates.length} file${updates.length > 1 ? 's' : ''}</span>
+      </summary>
+      <table class="w-full text-xs">
+        <tbody class="divide-y divide-neutral-800">
+          ${updates.map((u) => `
+            <tr class="hover:bg-neutral-800/50 cursor-pointer" data-path="${escapeHtml(u.destPath)}">
+              <td class="px-3 py-1.5 truncate max-w-xs">${escapeHtml(u.relPath)}</td>
+              <td class="px-3 py-1.5 text-right text-blue-300 whitespace-nowrap">${u.addedNames.map((n: string) => `+${escapeHtml(n)}`).join(' ')}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </details>
+  `;
+}
+
+// Click-to-reveal for all sync result rows (bound once, not per scan)
+syncDiffList.addEventListener('click', (e) => {
+  const row = (e.target as HTMLElement).closest('tr');
+  if (row?.dataset.path) window.api.revealFile(row.dataset.path);
+});
+
 syncScanBtn.addEventListener('click', async () => {
-  if (!syncSource || !syncDestSelect.value) return;
+  if (!syncSource || !syncEffectiveDest()) return;
 
   syncScanBtn.disabled = true;
   syncStatus.textContent = 'Scanning...';
@@ -1683,69 +1861,26 @@ syncScanBtn.addEventListener('click', async () => {
 
   try {
     const result = await window.api.syncScan(syncSource, syncEffectiveDest());
-    const allDiff = [...result.added, ...result.changed];
+    const allDiff = [...result.missing, ...result.different];
     syncFilesToTransfer = allDiff;
+    syncTagUpdates = result.tagUpdates;
 
-    syncStatus.textContent = `${result.sourceTotal} source, ${result.destTotal} dest — ${result.added.length} new, ${result.changed.length} changed, ${result.unchanged} unchanged`;
+    const tagNote = result.tagUpdates.length ? `, ${result.tagUpdates.length} tag updates` : '';
+    syncStatus.textContent = `${result.sourceTotal} source, ${result.destTotal} target — ${result.missing.length} missing, ${result.different.length} different, ${result.presentCount} present${tagNote}`;
 
-    if (allDiff.length === 0) {
+    if (allDiff.length === 0 && result.tagUpdates.length === 0) {
       syncAllSynced.classList.remove('hidden');
     } else {
       syncResults.classList.remove('hidden');
       syncTransferSection.classList.remove('hidden');
-      syncTransferBtn.textContent = `Sync ${allDiff.length} files`;
-
-      // Render added files
-      let html = '';
-      if (result.added.length > 0) {
-        html += `
-          <details open class="border border-neutral-700 rounded-md overflow-hidden">
-            <summary class="flex items-center gap-3 px-3 py-2 bg-neutral-800/50 hover:bg-neutral-800 cursor-pointer text-xs">
-              <span class="font-medium text-green-400">New</span>
-              <span class="text-neutral-500">${result.added.length} file${result.added.length > 1 ? 's' : ''}</span>
-              <span class="text-neutral-500 ml-auto">${formatSize(result.added.reduce((s, f) => s + f.size, 0))}</span>
-            </summary>
-            <table class="w-full text-xs">
-              <tbody class="divide-y divide-neutral-800">
-                ${result.added.map((f) => `
-                  <tr class="hover:bg-neutral-800/50 cursor-pointer" data-path="${escapeHtml(f.fullPath)}">
-                    <td class="px-3 py-1.5 truncate max-w-xs">${escapeHtml(f.relPath)}</td>
-                    <td class="px-3 py-1.5 text-right text-neutral-400 w-20 whitespace-nowrap">${formatSize(f.size)}</td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
-          </details>
-        `;
-      }
-      if (result.changed.length > 0) {
-        html += `
-          <details open class="border border-neutral-700 rounded-md overflow-hidden mt-1">
-            <summary class="flex items-center gap-3 px-3 py-2 bg-neutral-800/50 hover:bg-neutral-800 cursor-pointer text-xs">
-              <span class="font-medium text-yellow-400">Changed</span>
-              <span class="text-neutral-500">${result.changed.length} file${result.changed.length > 1 ? 's' : ''}</span>
-              <span class="text-neutral-500 ml-auto">${formatSize(result.changed.reduce((s, f) => s + f.size, 0))}</span>
-            </summary>
-            <table class="w-full text-xs">
-              <tbody class="divide-y divide-neutral-800">
-                ${result.changed.map((f) => `
-                  <tr class="hover:bg-neutral-800/50 cursor-pointer" data-path="${escapeHtml(f.fullPath)}">
-                    <td class="px-3 py-1.5 truncate max-w-xs">${escapeHtml(f.relPath)}</td>
-                    <td class="px-3 py-1.5 text-right text-neutral-400 w-20 whitespace-nowrap">${formatSize(f.size)}</td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
-          </details>
-        `;
-      }
-      syncDiffList.innerHTML = html;
-
-      // Click to reveal
-      syncDiffList.addEventListener('click', (e) => {
-        const row = (e.target as HTMLElement).closest('tr');
-        if (row?.dataset.path) window.api.revealFile(row.dataset.path);
-      });
+      const parts = [];
+      if (allDiff.length) parts.push(`${allDiff.length} file${allDiff.length > 1 ? 's' : ''}`);
+      if (result.tagUpdates.length) parts.push(`${result.tagUpdates.length} tag${result.tagUpdates.length > 1 ? 's' : ''}`);
+      syncTransferBtn.textContent = `Sync ${parts.join(' · ')}`;
+      syncDiffList.innerHTML =
+        renderSyncBucket('Missing', 'text-red-400', result.missing) +
+        renderSyncBucket('Different', 'text-yellow-400', result.different) +
+        renderTagBucket(result.tagUpdates);
     }
   } catch (e: any) {
     syncStatus.textContent = `Error: ${e.message}`;
@@ -1755,7 +1890,7 @@ syncScanBtn.addEventListener('click', async () => {
 });
 
 syncTransferBtn.addEventListener('click', async () => {
-  if (!syncFilesToTransfer.length || !syncDestSelect.value) return;
+  if ((!syncFilesToTransfer.length && !syncTagUpdates.length) || !syncEffectiveDest()) return;
 
   syncTransferBtn.disabled = true;
   syncScanBtn.disabled = true;
@@ -1763,7 +1898,7 @@ syncTransferBtn.addEventListener('click', async () => {
   syncProgressBar.style.width = '0%';
 
   try {
-    const result = await window.api.syncTransfer(syncFilesToTransfer, syncEffectiveDest());
+    const result = await window.api.syncTransfer(syncFilesToTransfer, syncEffectiveDest(), syncTagUpdates);
     if (result.cancelled) {
       syncProgressLabel.textContent = 'Cancelled';
       syncStatus.textContent = 'Sync cancelled';
