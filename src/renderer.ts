@@ -1615,7 +1615,7 @@ let syncSource = '';
 let syncFilesToTransfer: any[] = [];
 let syncTagUpdates: any[] = [];
 
-let syncTargetExact = false;
+const syncAppendCheckbox = $<HTMLInputElement>('#sync-append-checkbox');
 const syncDestDrop = document.getElementById('sync-dest-drop')!;
 const TRANSIENT_OPT_CLASS = 'sync-transient-opt';
 
@@ -1625,11 +1625,11 @@ function currentSyncTarget(): string {
 
 function persistSyncTarget() {
   window.api.setSetting('syncTarget', currentSyncTarget());
-  window.api.setSetting('syncTargetExact', syncTargetExact);
+  window.api.setSetting('syncAppendSourceName', syncAppendCheckbox.checked);
 }
 
 /** Select a target path, adding it as a transient (non-persisted) option if it isn't a saved destination. */
-function setSyncTarget(p: string, exact: boolean) {
+function setSyncTarget(p: string) {
   if (!transferDests.includes(p)) {
     syncDestSelect.querySelector(`.${TRANSIENT_OPT_CLASS}`)?.remove();
     const opt = document.createElement('option');
@@ -1639,7 +1639,6 @@ function setSyncTarget(p: string, exact: boolean) {
     syncDestSelect.appendChild(opt);
   }
   syncDestSelect.value = p;
-  syncTargetExact = exact;
   persistSyncTarget();
   syncScanBtn.disabled = !syncSource || !syncEffectiveDest();
   updateSyncDestHint();
@@ -1647,38 +1646,20 @@ function setSyncTarget(p: string, exact: boolean) {
 }
 
 function syncEffectiveDest(): string {
-  return resolveSyncTarget(syncSource, currentSyncTarget(), syncTargetExact);
+  return resolveSyncTarget(syncSource, currentSyncTarget(), syncAppendCheckbox.checked);
 }
 
 function updateSyncDestHint() {
   const hint = document.getElementById('sync-dest-hint')!;
   const transferHint = document.getElementById('sync-transfer-hint')!;
-  const target = currentSyncTarget();
   const dest = syncEffectiveDest();
   if (!syncSource || !dest) {
     hint.textContent = '';
     transferHint.textContent = '';
     return;
   }
-  const short = dest.split('/').slice(-2).join('/');
-  const srcName = syncSource.replace(/\/+$/, '').split('/').pop() ?? '';
-  const targetName = target.replace(/\/+$/, '').split('/').pop() ?? '';
-  const namesDiffer = !!srcName && !!targetName && srcName !== targetName;
-  if (!namesDiffer) {
-    hint.textContent = `→ ${short}/`;
-  } else {
-    const linkLabel = syncTargetExact
-      ? 'sync into subfolder instead'
-      : `sync into ${targetName} directly`;
-    hint.innerHTML = `→ ${escapeHtml(short)}/${syncTargetExact ? ' (exact)' : ''} · <button id="sync-exact-toggle" class="underline text-blue-400 hover:text-blue-300">${escapeHtml(linkLabel)}</button>`;
-    document.getElementById('sync-exact-toggle')!.addEventListener('click', () => {
-      syncTargetExact = !syncTargetExact;
-      persistSyncTarget();
-      updateSyncDestHint();
-      resetSyncResults();
-    });
-  }
-  transferHint.textContent = `Will sync to ${syncEffectiveDest()}`;
+  hint.textContent = `→ ${dest.split('/').slice(-2).join('/')}/`;
+  transferHint.textContent = `Will sync to ${dest}`;
 }
 
 function setSyncSource(p: string) {
@@ -1697,7 +1678,7 @@ function populateSyncDests() {
     ? transferDests.map((d) => `<option value="${escapeHtml(d)}">${escapeHtml(d.split('/').pop() ?? d)}</option>`).join('')
     : '<option value="">No destinations — open Settings</option>';
   if (prev && !transferDests.includes(prev)) {
-    setSyncTarget(prev, syncTargetExact);
+    setSyncTarget(prev);
     return;
   }
   syncScanBtn.disabled = !syncSource || !syncEffectiveDest();
@@ -1708,18 +1689,19 @@ async function loadSyncPaths() {
   const src = await window.api.getSetting('syncSource');
   if (src) setSyncSource(src);
   populateSyncDests();
-  const [target, exact, legacyExact] = await Promise.all([
+  const [target, append, legacyExact] = await Promise.all([
     window.api.getSetting('syncTarget'),
+    window.api.getSetting('syncAppendSourceName'),
     window.api.getSetting('syncTargetExact'),
-    window.api.getSetting('syncExactDest'),
   ]);
-  if (legacyExact && !target) {
-    // one-time migration from the removed "Exact folder…" row
-    setSyncTarget(legacyExact, true);
-    window.api.setSetting('syncExactDest', undefined);
-  } else if (target) {
-    setSyncTarget(target, !!exact);
+  syncAppendCheckbox.checked =
+    typeof append === 'boolean' ? append : typeof legacyExact === 'boolean' ? !legacyExact : true;
+  if (typeof legacyExact === 'boolean') {
+    window.api.setSetting('syncTargetExact', undefined);
+    window.api.setSetting('syncAppendSourceName', syncAppendCheckbox.checked);
   }
+  window.api.setSetting('syncExactDest', undefined);
+  if (target) setSyncTarget(target);
 }
 
 // Drag & drop for source
@@ -1754,7 +1736,7 @@ syncDestDrop.addEventListener('drop', (e) => {
   e.preventDefault();
   syncDestDrop.classList.replace('border-blue-500', 'border-neutral-700');
   const file = e.dataTransfer?.files[0];
-  if (file) setSyncTarget(window.api.getPathForFile(file), false);
+  if (file) setSyncTarget(window.api.getPathForFile(file));
 });
 
 // + button: add a saved destination (shared transferDests list), then select it
@@ -1767,13 +1749,18 @@ document.getElementById('sync-browse-dest')!.addEventListener('click', async () 
     populateSyncDests();
     populateTransferDests();
   }
-  setSyncTarget(p, false);
+  setSyncTarget(p);
 });
 
 syncDestSelect.addEventListener('change', () => {
-  syncTargetExact = false;
   persistSyncTarget();
   syncScanBtn.disabled = !syncSource || !syncEffectiveDest();
+  updateSyncDestHint();
+  resetSyncResults();
+});
+
+syncAppendCheckbox.addEventListener('change', () => {
+  persistSyncTarget();
   updateSyncDestHint();
   resetSyncResults();
 });
