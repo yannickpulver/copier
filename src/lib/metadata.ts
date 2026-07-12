@@ -20,20 +20,32 @@ interface MetadataResult {
   camera?: string;
 }
 
+const ENRICH_CONCURRENCY = 8;
+
 export async function enrichMetadata(
   files: FileInfo[],
   onProgress?: (current: number, total: number) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  for (let i = 0; i < files.length; i++) {
-    if (signal?.aborted) throw new Error('aborted');
-    if (!files[i].captureDate) {
-      const meta = await extractMetadata(files[i].fullPath);
-      files[i].captureDate = meta.captureDate;
-      files[i].camera = meta.camera;
+  let next = 0;
+  let done = 0;
+  const worker = async () => {
+    for (;;) {
+      if (signal?.aborted) throw new Error('aborted');
+      const i = next++;
+      if (i >= files.length) return;
+      if (!files[i].captureDate) {
+        const meta = await extractMetadata(files[i].fullPath);
+        files[i].captureDate = meta.captureDate;
+        files[i].camera = meta.camera;
+      }
+      done++;
+      onProgress?.(done, files.length);
     }
-    onProgress?.(i + 1, files.length);
-  }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(ENRICH_CONCURRENCY, files.length) }, worker),
+  );
   resolveAmbiguousCameras(files);
 }
 

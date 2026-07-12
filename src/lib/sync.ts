@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { copyOne } from './transfer';
 
 export interface SyncFileInfo {
   relPath: string;
@@ -37,7 +38,7 @@ export async function walkFolder(
       return;
     }
     for (const entry of entries) {
-      if (entry.name.startsWith('.')) continue;
+      if (entry.name.startsWith('.') || entry.name.endsWith('.copier-partial')) continue;
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         await walk(full);
@@ -118,11 +119,9 @@ export async function syncFiles(
     const destPath = path.join(destRoot, f.relPath);
     try {
       await fs.promises.mkdir(path.dirname(destPath), { recursive: true });
-      await fs.promises.copyFile(f.fullPath, destPath);
-      // Preserve timestamps
-      const stat = await fs.promises.stat(f.fullPath);
-      await fs.promises.utimes(destPath, stat.atime, stat.mtime);
+      await copyOne(f.fullPath, destPath, undefined, signal);
     } catch (e: any) {
+      if (signal?.aborted) break;
       errors.push(`${f.relPath}: ${e.message}`);
     }
     onProgress?.(i + 1, files.length, f.name);

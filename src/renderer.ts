@@ -22,7 +22,7 @@ declare global {
         backedUp: number;
         backedUpFiles?: { name: string; size: number; fullPath: string; captureDate?: string; isMedia?: boolean }[];
         missing: { name: string; size: number; fullPath: string; captureDate?: string; isMedia?: boolean }[];
-        suggestedFolders: { folder: string; count: number; source: string }[];
+        suggestedFolders: { folder: string; count: number; source: string; newestMtime: number }[];
         sources: { name: string; ok: boolean; error?: string }[];
       }>;
       listExistingFolders: (nasPath: string) => Promise<string[]>;
@@ -812,7 +812,7 @@ async function runScan(skipCheck: boolean, sdPathOverride?: string) {
       const hasMapping = [...existingSelect.querySelectorAll<HTMLSelectElement>('.date-folder-select')]
         .some((s) => s.value !== '');
       // Files already backed up into an existing folder → suggest adding there.
-      const predictedFolder = predictExistingFolder(result.suggestedFolders, lastExistingFolders);
+      const predictedFolder = predictExistingFolder(result.suggestedFolders, lastExistingFolders, media);
       let suggestedMode: string;
       if (hasMapping) {
         suggestedMode = 'existing';
@@ -954,10 +954,39 @@ dateGroupsPreview.addEventListener('change', () => {
 
 // --- Transfer ---
 
-window.api.onTransferProgress(({ current, total }) => {
-  const pct = total > 0 ? (current / total) * 100 : 0;
+let transferSpeed: { t: number; bytes: number; rate: number } | null = null;
+
+function formatEta(seconds: number): string {
+  if (!isFinite(seconds) || seconds < 0) return '';
+  const s = Math.round(seconds);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
+window.api.onTransferProgress(({ current, total, bytesDone, bytesTotal }) => {
+  const pct = bytesTotal > 0
+    ? (bytesDone / bytesTotal) * 100
+    : (total > 0 ? (current / total) * 100 : 0);
   progressBar.style.width = `${pct}%`;
-  progressLabel.textContent = `${current}/${total}`;
+
+  const now = performance.now();
+  if (!transferSpeed) transferSpeed = { t: now, bytes: bytesDone ?? 0, rate: 0 };
+  const dt = (now - transferSpeed.t) / 1000;
+  if (dt >= 0.5 && bytesDone != null) {
+    const inst = (bytesDone - transferSpeed.bytes) / dt;
+    transferSpeed.rate = transferSpeed.rate > 0 ? transferSpeed.rate * 0.7 + inst * 0.3 : inst;
+    transferSpeed.t = now;
+    transferSpeed.bytes = bytesDone;
+  }
+
+  let label = `${current}/${total}`;
+  if (transferSpeed.rate > 0 && bytesTotal > 0) {
+    const eta = formatEta((bytesTotal - bytesDone) / transferSpeed.rate);
+    label += ` · ${formatSize(transferSpeed.rate)}/s${eta ? ` · ${eta} left` : ''}`;
+  }
+  progressLabel.textContent = label;
 });
 
 transferBtn.addEventListener('click', async () => {
@@ -1005,6 +1034,7 @@ transferBtn.addEventListener('click', async () => {
   cancelBtn.classList.remove('hidden');
   progressTrack.classList.remove('hidden');
   progressBar.style.width = '0%';
+  transferSpeed = null;
   transferInProgress = true;
 
   try {
@@ -1071,16 +1101,30 @@ function suggestTransferMode(
 }
 
 // Predict the destination folder for new files. If some SD files are already
-// backed up inside an existing destination folder (e.g. an ongoing "Scotland"
-// trip), the new ones most likely belong there too. Picks the most-used
-// suggested folder whose name also exists in the destination.
+// backed up inside an existing destination folder (e.g. an ongoing "Ireland"
+// trip), the new ones most likely belong there too. Ranks candidates by how
+// recently shot their matched files are (not by match count — an old trip
+// still on the card would outvote the current one forever), and only suggests
+// a folder whose newest matched file is close in time to the new files.
+const PREDICT_MAX_GAP_MS = 7 * 24 * 60 * 60 * 1000;
+
 function predictExistingFolder(
-  suggested: { folder: string; count: number }[],
+  suggested: { folder: string; count: number; newestMtime?: number }[],
   existingFolders: string[],
+  newFiles: { captureDate?: string; mtime?: number }[],
 ): string | null {
   const set = new Set(existingFolders);
-  const ranked = [...suggested].sort((a, b) => b.count - a.count);
+  const newestNewFile = Math.max(
+    0,
+    ...newFiles.map((f) => (f.captureDate ? Date.parse(f.captureDate) : f.mtime ?? 0)),
+  );
+  const ranked = [...suggested].sort(
+    (a, b) => (b.newestMtime ?? 0) - (a.newestMtime ?? 0) || b.count - a.count,
+  );
   for (const sf of ranked) {
+    // Stale project (its newest matched file is far older than what's being
+    // added now) — adding there is almost certainly wrong; prefer a new folder.
+    if (newestNewFile > 0 && (sf.newestMtime ?? 0) < newestNewFile - PREDICT_MAX_GAP_MS) continue;
     // Walk up the path and take the deepest segment that exists as a top-level
     // destination folder, so a camera subfolder (Scotland/DJI) resolves to
     // "Scotland" — the camera-subfolder option then re-adds the DJI level.

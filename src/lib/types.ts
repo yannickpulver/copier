@@ -8,6 +8,7 @@ export interface FileInfo {
   size: number;
   relPath: string;
   fullPath: string;
+  mtime?: number; // ms since epoch
   captureDate?: string; // ISO string
   camera?: string;
   isMedia?: boolean;
