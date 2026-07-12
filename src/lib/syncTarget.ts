@@ -4,14 +4,11 @@ function basename(p: string): string {
 
 /**
  * Resolve the effective sync target.
- * - exact: use targetPath as-is
- * - target basename === source basename: use targetPath as-is
- * - otherwise: sync into <targetPath>/<source basename>
+ * - append: sync into <targetPath>/<source basename>
+ * - otherwise: use targetPath as-is
  */
-export function resolveSyncTarget(sourcePath: string, targetPath: string, exact: boolean): string {
+export function resolveSyncTarget(sourcePath: string, targetPath: string, append: boolean): string {
   if (!targetPath) return '';
-  if (exact || !sourcePath) return targetPath;
-  const srcName = basename(sourcePath);
-  if (basename(targetPath) === srcName) return targetPath;
-  return `${targetPath.replace(/\/+$/, '')}/${srcName}`;
+  if (!append || !sourcePath) return targetPath;
+  return `${targetPath.replace(/\/+$/, '')}/${basename(sourcePath)}`;
 }
