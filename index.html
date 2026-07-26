@@ -270,10 +270,12 @@
             <button id="cancel-transfer-btn" class="hidden px-3 py-1.5 bg-red-600/80 hover:bg-red-500 rounded-md text-xs font-medium transition-colors">
               Cancel
             </button>
-            <div id="progress-track" class="hidden flex-1 bg-neutral-800 rounded-full h-2 overflow-hidden">
-              <div id="progress-bar" class="bg-green-500 h-full transition-all duration-200" style="width: 0%"></div>
+            <div class="flex-1 flex flex-col gap-1">
+              <div id="progress-track" class="hidden bg-neutral-800 rounded-full h-2 overflow-hidden">
+                <div id="progress-bar" class="bg-green-500 h-full transition-all duration-200" style="width: 0%"></div>
+              </div>
+              <span id="progress-label" class="text-neutral-400 text-xs text-right"></span>
             </div>
-            <span id="progress-label" class="text-neutral-400 text-xs w-16 text-right"></span>
           </div>
         </div>
       </div>
