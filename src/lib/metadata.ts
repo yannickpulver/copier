@@ -354,6 +354,12 @@ async function readClassicUdta(
         else if (type === '©day') dateStr ??= payload;
       }
     }
+    // Canon MP4/MOV: plain `modl` atom, payload is [4-byte version/flags]
+    // [2-byte language][null-terminated text], e.g. "Canon EOS R5".
+    else if (type === 'modl' && off + 14 <= off + size) {
+      const payload = buf.toString('utf8', off + 14, off + size).replace(/\0+$/, '').trim();
+      if (payload) model ??= payload;
+    }
     off += size;
   }
   let captureDate: string | undefined;
