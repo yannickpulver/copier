@@ -132,6 +132,7 @@ const allBackedUp = $('#all-backed-up');
 const backedUpMsg = $('#backed-up-msg');
 const ejectBtn = $<HTMLButtonElement>('#eject-btn');
 const fileTable = $('#file-table');
+const fileTableLabel = $('#file-table-label');
 const otherSection = $('#other-section');
 const otherLabel = $('#other-label');
 const otherList = $<HTMLTableSectionElement>('#other-list');
@@ -738,6 +739,8 @@ async function runScan(skipCheck: boolean, sdPathOverride?: string) {
       fileTable.classList.remove('hidden');
     }
 
+    fileTableLabel.textContent = `New files (${describeFileTypes(media)})`;
+
     // Group by session (time-gap aware, respects mergedDays)
     renderFileListSessions(media);
 
@@ -1098,6 +1101,17 @@ function suggestTransferMode(
   }
 
   return { mode: 'grouped' };
+}
+
+// "23 · 12 JPG, 8 RAF, 3 MP4" — per-extension counts, most common first.
+function describeFileTypes(files: { name: string }[]): string {
+  const counts = new Map<string, number>();
+  for (const f of files) {
+    const ext = f.name.split('.').pop()?.toUpperCase() ?? '?';
+    counts.set(ext, (counts.get(ext) ?? 0) + 1);
+  }
+  const parts = [...counts].sort((a, b) => b[1] - a[1]).map(([ext, n]) => `${n} ${ext}`);
+  return parts.length > 1 ? `${files.length} · ${parts.join(', ')}` : parts[0] ?? '0';
 }
 
 // Predict the destination folder for new files. If some SD files are already

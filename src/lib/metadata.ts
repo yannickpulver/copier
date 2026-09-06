@@ -444,6 +444,7 @@ const DJI_MODEL_MAP: Record<string, string> = {
   AC003: 'DJI Osmo Action 4',
   AC004: 'DJI Osmo Action 5 Pro',
   'PP-101': 'DJI Osmo Pocket 3',
+  OW001: 'DJI Osmo Nano',
 };
 
 function cleanCameraName(raw: string | undefined): string | undefined {
