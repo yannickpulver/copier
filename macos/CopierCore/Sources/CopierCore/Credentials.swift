@@ -156,6 +156,65 @@ extension CredentialProblem: LocalizedError {
     public var errorDescription: String? { message }
 }
 
+/// Where keychain items actually live. Injectable so tests never touch the real one.
+public protocol KeychainBackend: Sendable {
+    func value(service: String, account: String) -> String?
+    func set(_ value: String?, service: String, account: String) throws
+}
+
+/// Process-wide cache of keychain reads.
+///
+/// macOS asks the user for permission per reading process *and* per item read that is
+/// not already authorised, so several independent reads of the same password during one
+/// launch stack up several dialogs. Each account is therefore read at most once per
+/// process, and writes update the cache in place.
+final class KeychainCache: @unchecked Sendable {
+    static let shared = KeychainCache()
+
+    private let lock = NSLock()
+    /// `nil` inner value means "read, and there was nothing there".
+    private var entries: [String: String?] = [:]
+
+    private func key(service: String, account: String) -> String { "\(service)\u{0}\(account)" }
+
+    func value(service: String, account: String, load: () -> String?) -> String? {
+        let key = key(service: service, account: account)
+        lock.lock()
+        if let cached = entries[key] {
+            lock.unlock()
+            return cached
+        }
+        lock.unlock()
+
+        // Loaded outside the lock: the keychain can block on a user prompt.
+        let loaded = load()
+
+        lock.lock()
+        // A write that happened while we were blocked wins.
+        if let cached = entries[key] {
+            lock.unlock()
+            return cached
+        }
+        entries[key] = loaded
+        lock.unlock()
+        return loaded
+    }
+
+    func store(_ value: String?, service: String, account: String) {
+        let key = key(service: service, account: account)
+        lock.lock()
+        entries[key] = value
+        lock.unlock()
+    }
+
+    /// Only used by tests.
+    func removeAll() {
+        lock.lock()
+        entries.removeAll()
+        lock.unlock()
+    }
+}
+
 /// Generic-password keychain storage for the Synology password.
 public struct KeychainStore: Sendable {
     /// Keychain service name.
@@ -164,9 +223,11 @@ public struct KeychainStore: Sendable {
     public static let synologyAccount = "synology-password"
 
     public let service: String
+    private let backend: any KeychainBackend
 
-    public init(service: String = defaultService) {
+    public init(service: String = defaultService, backend: any KeychainBackend = SecItemKeychainBackend()) {
         self.service = service
+        self.backend = backend
     }
 
     /// The stored Synology password, if any.
@@ -175,8 +236,25 @@ public struct KeychainStore: Sendable {
         nonmutating set { try? set(newValue, for: Self.synologyAccount) }
     }
 
-    /// Read a generic password.
+    /// Read a generic password. Each account is read from the keychain once per process.
     public func value(for account: String) -> String? {
+        KeychainCache.shared.value(service: service, account: account) {
+            backend.value(service: service, account: account)
+        }
+    }
+
+    /// Store (or, with `nil`, delete) a generic password.
+    public func set(_ value: String?, for account: String) throws {
+        try backend.set(value, service: service, account: account)
+        KeychainCache.shared.store(value, service: service, account: account)
+    }
+}
+
+/// The real keychain, via `SecItem`.
+public struct SecItemKeychainBackend: KeychainBackend {
+    public init() {}
+
+    public func value(service: String, account: String) -> String? {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -193,8 +271,7 @@ public struct KeychainStore: Sendable {
         return String(data: data, encoding: .utf8)
     }
 
-    /// Store (or, with `nil`, delete) a generic password.
-    public func set(_ value: String?, for account: String) throws {
+    public func set(_ value: String?, service: String, account: String) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

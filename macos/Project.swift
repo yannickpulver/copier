@@ -36,13 +36,32 @@ let appSettings: SettingsDictionary = sharedSettings.merging([
     // Notarization needs the hardened runtime; the app walks arbitrary volumes, so no sandbox.
     "ENABLE_HARDENED_RUNTIME": "YES",
     "ENABLE_APP_SANDBOX": "NO",
-    // "Sign to Run Locally" — ad-hoc, no team required for a local build.
+    // Release stays manual and ad-hoc by default; the CI archive step passes its own
+    // Developer ID identity and team. Debug signing is overridden below.
     "CODE_SIGN_IDENTITY": "-",
     "CODE_SIGN_STYLE": "Manual",
     "ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon",
     "ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME": "AccentColor",
     "COMBINE_HIDPI_IMAGES": "YES",
 ]) { _, new in new }
+
+/// Local Debug builds are signed with the developer certificate instead of ad hoc.
+///
+/// An ad-hoc signature changes on every rebuild, so the keychain ACL of the stored
+/// NAS password never matches the new binary and macOS asks for permission again on
+/// each launch. A stable signing identity keeps the ACL valid.
+/// Manual rather than automatic: automatic signing resolves a "Mac Development"
+/// certificate through an Xcode account, which fails on a headless build. The
+/// development certificate is named directly instead.
+///
+/// The team is the certificate's OU (`337L47P9N7`), not the `386X9Y5M92` in its common
+/// name — Xcode matches `DEVELOPMENT_TEAM` against the OU. Override with
+/// `TUIST_COPIER_TEAM` on another machine.
+let debugSigningSettings: SettingsDictionary = [
+    "CODE_SIGN_STYLE": "Manual",
+    "CODE_SIGN_IDENTITY": "Apple Development",
+    "DEVELOPMENT_TEAM": .string(Environment.copierTeam.getString(default: "337L47P9N7")),
+]
 
 // MARK: - Project
 
@@ -86,7 +105,13 @@ let project = Project(
             dependencies: [
                 .package(product: "CopierCore"),
             ],
-            settings: .settings(base: appSettings)
+            settings: .settings(
+                base: appSettings,
+                configurations: [
+                    .debug(name: .debug, settings: debugSigningSettings),
+                    .release(name: .release),
+                ]
+            )
         ),
         .target(
             name: "CopierTests",

@@ -149,3 +149,92 @@ struct SynologyListFoldersTests {
         }
     }
 }
+
+// MARK: - Keychain
+
+/// Counts how often the real keychain would have been touched.
+private final class CountingKeychain: KeychainBackend, @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [String: String] = [:]
+    private(set) var reads = 0
+    private(set) var writes = 0
+
+    init(initial: [String: String] = [:]) {
+        storage = initial
+    }
+
+    func value(service: String, account: String) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        reads += 1
+        return storage[account]
+    }
+
+    func set(_ value: String?, service: String, account: String) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        writes += 1
+        storage[account] = value
+    }
+}
+
+@Suite("KeychainStore caching")
+struct KeychainStoreTests {
+    @Test("two reads of the same account hit the keychain once")
+    func readsOnce() {
+        let backend = CountingKeychain(initial: [KeychainStore.synologyAccount: "hunter2"])
+        let store = KeychainStore(service: "copier.tests.\(UUID().uuidString)", backend: backend)
+
+        #expect(store.synologyPassword == "hunter2")
+        #expect(store.synologyPassword == "hunter2")
+        #expect(store.value(for: KeychainStore.synologyAccount) == "hunter2")
+        #expect(backend.reads == 1)
+    }
+
+    @Test("a second store for the same service shares the cache")
+    func sharesAcrossInstances() {
+        let service = "copier.tests.\(UUID().uuidString)"
+        let backend = CountingKeychain(initial: [KeychainStore.synologyAccount: "hunter2"])
+
+        #expect(KeychainStore(service: service, backend: backend).synologyPassword == "hunter2")
+        #expect(KeychainStore(service: service, backend: backend).synologyPassword == "hunter2")
+        #expect(backend.reads == 1)
+    }
+
+    @Test("a missing item is remembered as missing, without asking again")
+    func remembersMisses() {
+        let backend = CountingKeychain()
+        let store = KeychainStore(service: "copier.tests.\(UUID().uuidString)", backend: backend)
+
+        #expect(store.synologyPassword == nil)
+        #expect(store.synologyPassword == nil)
+        #expect(backend.reads == 1)
+    }
+
+    @Test("a write updates the cache instead of invalidating it")
+    func writeUpdatesCache() throws {
+        let backend = CountingKeychain(initial: [KeychainStore.synologyAccount: "old"])
+        let store = KeychainStore(service: "copier.tests.\(UUID().uuidString)", backend: backend)
+
+        #expect(store.synologyPassword == "old")
+        store.synologyPassword = "new"
+        #expect(store.synologyPassword == "new")
+        #expect(backend.writes == 1)
+        #expect(backend.reads == 1)
+
+        store.synologyPassword = nil
+        #expect(store.synologyPassword == nil)
+        #expect(backend.reads == 1)
+    }
+
+    @Test("different accounts are cached separately")
+    func perAccountCache() {
+        let backend = CountingKeychain(initial: ["a": "1", "b": "2"])
+        let store = KeychainStore(service: "copier.tests.\(UUID().uuidString)", backend: backend)
+
+        #expect(store.value(for: "a") == "1")
+        #expect(store.value(for: "b") == "2")
+        #expect(store.value(for: "a") == "1")
+        #expect(backend.reads == 2)
+    }
+}

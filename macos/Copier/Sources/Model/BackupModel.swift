@@ -182,6 +182,8 @@ final class BackupModel {
     private let effects: any BackupEffects
     private var filesByURL: [URL: MediaFile] = [:]
     private var work: Task<Void, Never>?
+    /// The location probe that is currently running, if any.
+    private var locationCheck: Task<Void, Never>?
     private var speed = SpeedEstimator()
 
     init(dependencies: BackupDependencies = BackupDependencies(), effects: any BackupEffects = SilentBackupEffects()) {
@@ -857,7 +859,22 @@ final class BackupModel {
     }
 
     /// Probe every configured location: local paths must exist, the NAS must accept a login.
+    ///
+    /// Only one probe runs at a time: every screen showing the pill row, plus each
+    /// settings change, would otherwise start its own — and each NAS probe resolves
+    /// credentials, which can mean a keychain prompt and an `op` call.
     func checkLocations() async {
+        if let running = locationCheck {
+            await running.value
+            return
+        }
+        let task = Task { await probeLocations() }
+        locationCheck = task
+        await task.value
+        locationCheck = nil
+    }
+
+    private func probeLocations() async {
         reloadLocations()
         let settings = dependencies.settings
         var updated = locations
