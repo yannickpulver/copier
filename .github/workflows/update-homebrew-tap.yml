@@ -34,7 +34,7 @@ jobs:
         id: sha
         run: |
           V="${{ steps.ver.outputs.version }}"
-          URL="https://github.com/${{ github.repository }}/releases/download/${{ steps.ver.outputs.tag }}/copier-darwin-arm64-$V.zip"
+          URL="https://github.com/${{ github.repository }}/releases/download/${{ steps.ver.outputs.tag }}/Copier-$V.zip"
           curl -fsSL -o asset.zip "$URL"
           SHA=$(sha256sum asset.zip | cut -d' ' -f1)
           echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
@@ -53,19 +53,19 @@ jobs:
             version "${{ steps.ver.outputs.version }}"
             sha256 "${{ steps.sha.outputs.sha256 }}"
 
-            url "https://github.com/yannickpulver/copier/releases/download/v#{version}/copier-darwin-arm64-#{version}.zip"
+            url "https://github.com/yannickpulver/copier/releases/download/v#{version}/Copier-#{version}.zip"
             name "copier"
-            desc "Electron copier app"
+            desc "Back up photos and videos from SD cards to NAS or SSD"
             homepage "https://github.com/yannickpulver/copier"
 
-            depends_on arch: :arm64
+            depends_on macos: ">= :tahoe"
 
-            app "copier.app"
+            app "Copier.app"
 
             zap trash: [
-              "~/Library/Application Support/copier",
               "~/Library/Preferences/com.yannickpulver.copier.plist",
-              "~/Library/Logs/copier",
+              "~/Library/Application Support/copier",
+              "~/Library/Saved Application State/com.yannickpulver.copier.savedState",
             ]
           end
           EOF
