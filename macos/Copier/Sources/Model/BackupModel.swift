@@ -26,21 +26,56 @@ struct ReviewFile: Identifiable, Sendable {
 struct ReviewDay: Identifiable, Sendable {
     var day: Day?
     var files: [ReviewFile]
+    /// Files broken into runs taken close together — computed once, never in `body`.
+    var clusters: [FileCluster]
+    /// `[(photo, 112), (video, 36)]`, for the coloured counts in the header.
+    var kindCounts: [(kind: FileKind, count: Int)]
 
     var id: String { day?.isoString ?? "unknown" }
     /// Files that are ticked when the screen opens.
     var newFiles: [ReviewFile] { files.filter { $0.reason == .new } }
+
+    /// Files already present in a check location.
+    let backedUpCount: Int
+    /// Non-media files (sidecars and the like).
+    let otherCount: Int
+
+    init(day: Day?, files: [ReviewFile]) {
+        self.day = day
+        self.files = files
+        clusters = TimeClustering.cluster(files)
+        kindCounts = TimeClustering.kindCounts(files)
+        backedUpCount = files.count { $0.reason == .backedUp }
+        otherCount = files.count { $0.reason == .other }
+    }
+
+    /// The note a fully backed-up day shows instead of a folder field.
+    var backedUpNote: String {
+        if backedUpCount > 0, otherCount > 0 {
+            return "All \(backedUpCount) files backed up · \(otherCount) other"
+        }
+        if backedUpCount > 0 {
+            return "All \(backedUpCount) file\(backedUpCount == 1 ? "" : "s") backed up"
+        }
+        return "\(otherCount) other file\(otherCount == 1 ? "" : "s")"
+    }
 }
 
 /// A configured check location and whether it answered.
 struct LocationStatus: Identifiable, Sendable, Hashable {
-    var name: String
+    /// Matches ``BackupIndexSource/name`` so a pill can switch its source off.
+    var sourceName: String
+    /// Short label for the pill.
+    var displayName: String
+    /// Full path or host — the pill's tooltip.
     var detail: String
     var isNAS: Bool
+    /// Only searched when the NAS API failed.
+    var isFallback: Bool
     /// `nil` while the check is still running.
     var reachable: Bool?
 
-    var id: String { "\(name)|\(detail)" }
+    var id: String { sourceName }
 }
 
 // MARK: - Dependencies
@@ -56,6 +91,9 @@ struct BackupDependencies: Sendable {
     var freeSpace: any FreeSpaceProviding = SystemFreeSpaceProvider()
     var existingFolders: @Sendable (URL) -> [String] = { FolderNaming.existingFolders(at: $0) }
     var eject: @Sendable (URL) throws -> Void = { try VolumeLister.eject($0) }
+
+    /// The name ``SynologySource`` reports, used to tie its pill to its source.
+    static let synologySourceName = "Synology API"
 
     /// The Synology API source (when configured) plus every configured check path.
     static func liveSources(_ settings: SettingsStore) async -> [any BackupIndexSource] {
@@ -79,6 +117,9 @@ final class BackupModel {
     /// The screen that is showing.
     enum Phase {
         case waiting
+        /// A card is here and was not scanned yet — the user picks the check
+        /// locations first, then starts the scan.
+        case ready
         case scanning(ScanEvent?)
         case review
         case copying
@@ -100,6 +141,8 @@ final class BackupModel {
     private(set) var scan: ScanResult?
     private(set) var days: [ReviewDay] = []
     private(set) var locations: [LocationStatus] = []
+    /// Locations the user switched off for the next scan. Deliberately not persisted.
+    private(set) var disabledLocationNames: Set<String> = []
     /// Sources that failed during the last scan — shown as a warning banner.
     private(set) var failedSources: [SourceResult] = []
 
@@ -109,6 +152,10 @@ final class BackupModel {
         didSet { dependencies.settings.structure = structure }
     }
     private(set) var ticked: Set<URL> = []
+    /// `days`, but with the days that hold nothing to back up moved to the end.
+    /// Rebuilt when the scan lands and whenever ticks change — never in a view body.
+    private(set) var orderedDays: [ReviewDay] = []
+    private(set) var backedUpOnlyDayIDs: Set<String> = []
     var expandedDayID: String?
     private(set) var targets: [Day?: FolderTarget] = [:]
     private(set) var oneFolderTarget: FolderTarget = .new(title: "")
@@ -156,6 +203,11 @@ final class BackupModel {
         }
     }
 
+    /// `true` when there is a card to scan and nothing is running.
+    var canScan: Bool {
+        selectedCard != nil && !isBusy
+    }
+
     var isCopying: Bool {
         if case .copying = phase { return true }
         return false
@@ -165,6 +217,7 @@ final class BackupModel {
     var phaseName: String {
         switch phase {
         case .waiting: return "waiting"
+        case .ready: return "ready"
         case .scanning: return "scanning"
         case .review: return "review"
         case .copying: return "copying"
@@ -190,10 +243,10 @@ final class BackupModel {
         return scan.missing.isEmpty && !scan.allFiles.isEmpty
     }
 
-    /// `206 backed up · 4 other`.
+    /// `11 new · 206 backed up · 4 other`.
     var reviewSubtitle: String {
         guard let scan else { return "" }
-        var parts: [String] = []
+        var parts = ["\(scan.missing.count) new"]
         if !scan.backedUp.isEmpty { parts.append("\(scan.backedUp.count) backed up") }
         let other = scan.otherFiles.count
         if other > 0 { parts.append("\(other) other") }
@@ -204,6 +257,29 @@ final class BackupModel {
 
     func isTicked(day: ReviewDay) -> Bool {
         day.files.contains { ticked.contains($0.id) }
+    }
+
+    /// `true` for a day that holds nothing new and has nothing ticked — it sits in the
+    /// "Already backed up" block, collapsed and greyed.
+    func isBackedUpOnly(_ day: ReviewDay) -> Bool {
+        backedUpOnlyDayIDs.contains(day.id)
+    }
+
+    /// Days with something to copy first (oldest to newest), fully backed-up days after.
+    private func rebuildDayOrder() {
+        var active: [ReviewDay] = []
+        var settled: [ReviewDay] = []
+        var settledIDs: Set<String> = []
+        for day in days {
+            if day.newFiles.isEmpty, !isTicked(day: day) {
+                settled.append(day)
+                settledIDs.insert(day.id)
+            } else {
+                active.append(day)
+            }
+        }
+        orderedDays = active + settled
+        backedUpOnlyDayIDs = settledIDs
     }
 
     /// The target used for a day — one folder collapses every day onto one target.
@@ -252,12 +328,17 @@ final class BackupModel {
 
     // MARK: - Cards
 
-    /// Re-read the mounted volumes; starts a scan when a card appears.
+    /// Re-read the mounted volumes. Nothing is scanned — a card just becomes available.
     func refreshCards() async {
-        let volumes = await dependencies.volumes.list()
+        let listed = await dependencies.volumes.list()
+        let excluded = Self.configuredPaths(dependencies.settings)
+        let volumes = await Task.detached {
+            listed.filter { Self.isCard($0, excluding: excluded) }
+        }.value
         cards = volumes
 
         if let selected = selectedCard, !volumes.contains(where: { $0.url == selected.url }) {
+            // Either unmounted, or it just became a configured location.
             cardDisappeared(selected)
             return
         }
@@ -266,15 +347,15 @@ final class BackupModel {
         }
     }
 
-    /// Make a card the active one and scan it. Refused during a copy — switching cards
-    /// would cancel the transfer that is running.
+    /// Make a card the active one. Scanning is a deliberate step, so this only opens
+    /// the ready screen. Refused during a copy — switching cards would cancel it.
     func select(_ card: RemovableVolume) {
         guard !isCopying else { return }
         guard selectedCard?.url != card.url else { return }
         work?.cancel()
         selectedCard = card
         resetScanState()
-        startScan()
+        phase = .ready
     }
 
     /// The active card vanished.
@@ -299,6 +380,30 @@ final class BackupModel {
         }
     }
 
+    /// Paths the user configured as check locations or destinations — a volume holding
+    /// one of them is a backup target, never a card to copy from.
+    nonisolated static func configuredPaths(_ settings: SettingsStore) -> [String] {
+        settings.checkPaths.map(\.path) + settings.transferDestinations
+    }
+
+    /// `true` when a mounted volume may be offered as a card.
+    ///
+    /// Excluded: volumes that contain (or are) a configured check location or
+    /// destination, and network shares — an SMB mount of the NAS is not a card.
+    nonisolated static func isCard(_ volume: RemovableVolume, excluding configured: [String]) -> Bool {
+        let volumeComponents = URL(fileURLWithPath: volume.url.path).standardizedFileURL.pathComponents
+        for path in configured {
+            let components = URL(fileURLWithPath: path).standardizedFileURL.pathComponents
+            guard components.count >= volumeComponents.count else { continue }
+            if Array(components.prefix(volumeComponents.count)) == volumeComponents { return false }
+        }
+        if let isLocal = try? volume.url.resourceValues(forKeys: [.volumeIsLocalKey]).volumeIsLocal,
+           isLocal == false {
+            return false
+        }
+        return true
+    }
+
     /// Entry point for the unmount notification.
     func handleUnmount(_ url: URL?) async {
         if let url { volumeUnmounted(url) }
@@ -318,6 +423,8 @@ final class BackupModel {
     private func resetScanState() {
         scan = nil
         days = []
+        orderedDays = []
+        backedUpOnlyDayIDs = []
         ticked = []
         targets = [:]
         oneFolderTarget = .new(title: "")
@@ -346,8 +453,10 @@ final class BackupModel {
             self.phase = .scanning(event)
         }
 
+        let disabled = disabledLocationNames
         work = Task.detached { [weak self] in
             let sources = await dependencies.sources(dependencies.settings)
+                .filter { !disabled.contains($0.name) }
             do {
                 let result = try await dependencies.scan.run(
                     card: card.url,
@@ -378,6 +487,12 @@ final class BackupModel {
     private func scanFinished(_ result: ScanResult, existingFolders: [String], freeBytes: Int64?) {
         scan = result
         failedSources = result.sources.filter { !$0.succeeded }
+        // A scan is the most accurate reachability check there is — fold it back into
+        // the pills so Review shows what actually answered.
+        for source in result.sources {
+            guard let index = locations.firstIndex(where: { $0.sourceName == source.name }) else { continue }
+            locations[index].reachable = source.succeeded
+        }
         existingFolderNames = existingFolders
         destinationFreeBytes = freeBytes
 
@@ -412,6 +527,7 @@ final class BackupModel {
         }
 
         ticked = Set(days.flatMap(\.newFiles).map(\.id))
+        rebuildDayOrder()
         expandedDayID = days.first(where: { !$0.newFiles.isEmpty })?.id ?? days.first?.id
         rebuildTargets()
         autoEnableCameraSubfolders()
@@ -464,6 +580,7 @@ final class BackupModel {
         } else {
             ticked.remove(file.id)
         }
+        rebuildDayOrder()
         shortfall = nil
     }
 
@@ -476,6 +593,7 @@ final class BackupModel {
         } else {
             for file in day.files { ticked.remove(file.id) }
         }
+        rebuildDayOrder()
         shortfall = nil
     }
 
@@ -632,7 +750,11 @@ final class BackupModel {
         effects.setDockProgress(nil)
         switch phase {
         case .scanning:
-            phase = scan == nil ? .waiting : .review
+            if scan != nil {
+                phase = .review
+            } else {
+                phase = selectedCard == nil ? .waiting : .ready
+            }
         case .copying:
             break // the transfer reports back and returns to review
         default:
@@ -664,10 +786,12 @@ final class BackupModel {
         Task { await refreshCards() }
     }
 
-    /// Start over after a failure.
+    /// Start over after a failure: back to the ready screen for the same card, so the
+    /// check locations can be changed before trying again.
     func retry() {
         if selectedCard != nil {
-            startScan()
+            resetScanState()
+            phase = .ready
         } else {
             phase = .waiting
             Task { await refreshCards() }
@@ -676,34 +800,79 @@ final class BackupModel {
 
     // MARK: - Locations
 
-    /// The configured check locations, as the waiting screen lists them.
+    /// The configured check locations, in the order the scan searches them.
     static func configuredLocations(_ settings: SettingsStore) -> [LocationStatus] {
         var result: [LocationStatus] = []
         if let host = settings.synologyHost, !host.isEmpty, !settings.synologyFolders.isEmpty {
             result.append(
                 LocationStatus(
-                    name: "NAS " + settings.synologyFolders.joined(separator: ", "),
-                    detail: host,
+                    sourceName: BackupDependencies.synologySourceName,
+                    displayName: host,
+                    detail: "Synology API · " + settings.synologyFolders.joined(separator: ", "),
                     isNAS: true,
+                    isFallback: false,
                     reachable: nil
                 )
             )
         }
         for path in settings.checkPaths {
-            result.append(LocationStatus(name: path.label, detail: path.path, isNAS: false, reachable: nil))
+            result.append(
+                LocationStatus(
+                    sourceName: path.label,
+                    displayName: path.label,
+                    detail: path.path,
+                    isNAS: false,
+                    isFallback: path.fallbackOnly,
+                    reachable: nil
+                )
+            )
         }
         return result
     }
 
+    /// Switch a location off (or back on) for the next scan. In memory only — this is
+    /// a "skip it this time", not a settings change.
+    func toggleLocation(_ location: LocationStatus) {
+        if disabledLocationNames.contains(location.sourceName) {
+            disabledLocationNames.remove(location.sourceName)
+        } else {
+            disabledLocationNames.insert(location.sourceName)
+        }
+    }
+
+    func isDisabled(_ location: LocationStatus) -> Bool {
+        disabledLocationNames.contains(location.sourceName)
+    }
+
+    /// Re-read the configured locations after a settings change.
+    func reloadLocations() {
+        let configured = Self.configuredLocations(dependencies.settings)
+        // Keep what we already know about locations that did not change.
+        let known = Dictionary(uniqueKeysWithValues: locations.map { ($0.id, $0.reachable) })
+        locations = configured.map { location in
+            var updated = location
+            updated.reachable = known[location.id] ?? nil
+            return updated
+        }
+    }
+
     /// Probe every configured location: local paths must exist, the NAS must accept a login.
     func checkLocations() async {
-        locations = Self.configuredLocations(dependencies.settings)
+        reloadLocations()
         let settings = dependencies.settings
         var updated = locations
         for (index, location) in locations.enumerated() {
+            updated[index].reachable = nil
+            locations = updated
             if location.isNAS {
                 let reachable = await Task.detached { () -> Bool in
-                    guard let config = await CredentialResolver.synologyConfig(settings: settings) else { return false }
+                    // Reaching the NAS is about credentials — shared folders are a
+                    // scanning concern, so a missing folder list must not read as offline.
+                    let configuration = await CredentialResolver.makeSynologyConfig(
+                        settings: settings,
+                        requireFolders: false
+                    )
+                    guard let config = try? configuration.get() else { return false }
                     let client = SynologyClient(config: config)
                     do {
                         try await client.login()

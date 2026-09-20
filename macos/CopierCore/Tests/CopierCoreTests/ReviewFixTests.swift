@@ -95,8 +95,11 @@ struct ProcessRunnerTests {
             arguments: ["-c", "sleep 30"],
             timeout: 0.3
         )
-        #expect(result == nil)
-        #expect(Date().timeIntervalSince(started) < 5)
+        // A timeout comes back flagged, so callers can tell it from a launch failure.
+        #expect(result?.timedOut == true)
+        #expect(result?.status != 0)
+        #expect(ProcessRunner.run(executable: "/bin/sh", arguments: ["-c", "sleep 30"], timeout: 0.3) == nil)
+        #expect(Date().timeIntervalSince(started) < 10)
     }
 }
 
@@ -146,5 +149,90 @@ struct FinderTagsReadTests {
         let tags = FinderTags.read(urls: [tagged, plain, root.url.appendingPathComponent("missing.jpg")])
         #expect(tags.count == 1)
         #expect(tags[tagged] == ["Red\n6"])
+    }
+}
+
+// MARK: - NAS connection test plumbing
+
+@Suite("Synology connection test")
+struct SynologyConnectionTests {
+    private func store(
+        host: String? = "nas.local",
+        user: String? = "yannick",
+        password: String? = "pw",
+        folders: [String] = []
+    ) -> SettingsStore {
+        let defaults = UserDefaults(suiteName: "copier-core-tests-\(UUID().uuidString)")!
+        let store = SettingsStore(defaults: defaults)
+        store.synologyHost = host
+        store.synologyUser = user
+        store.synologyPassword = password
+        store.synologyFolders = folders
+        return store
+    }
+
+    @Test("a login-only config does not need shared folders")
+    func loginConfigIgnoresFolders() async throws {
+        let result = await CredentialResolver.makeSynologyConfig(
+            settings: store(),
+            keychain: KeychainStore(service: "copier.tests.\(UUID().uuidString)"),
+            requireFolders: false
+        )
+        let config = try result.get()
+        #expect(config.host == "nas.local")
+        #expect(config.folders.isEmpty)
+    }
+
+    @Test("indexing still requires shared folders")
+    func indexingRequiresFolders() async throws {
+        let result = await CredentialResolver.makeSynologyConfig(
+            settings: store(),
+            keychain: KeychainStore(service: "copier.tests.\(UUID().uuidString)"),
+            requireFolders: true
+        )
+        #expect(result == .failure(.missingFolders))
+    }
+
+    @Test("each missing field names itself")
+    func missingFieldsAreNamed() async throws {
+        let keychain = KeychainStore(service: "copier.tests.\(UUID().uuidString)")
+        let noHost = await CredentialResolver.makeSynologyConfig(
+            settings: store(host: nil), keychain: keychain, requireFolders: false
+        )
+        #expect(noHost == .failure(.missingHost))
+        #expect(CredentialProblem.missingHost.message == "Host is missing.")
+
+        let noUser = await CredentialResolver.makeSynologyConfig(
+            settings: store(user: nil), keychain: keychain, requireFolders: false
+        )
+        #expect(noUser == .failure(.missingUser))
+
+        let noPassword = await CredentialResolver.makeSynologyConfig(
+            settings: store(password: nil), keychain: keychain, requireFolders: false
+        )
+        #expect(noPassword == .failure(.missingPassword))
+        #expect(CredentialProblem.missingPassword.message == "Password is missing.")
+    }
+
+    @Test("login failures report the Synology reason")
+    func loginFailureReason() {
+        #expect(SynologyClient.loginErrorReason(400) == "wrong user name or password")
+        #expect(SynologyClient.loginErrorReason(403) == "a two-step verification code is required")
+        #expect(SynologyClient.loginErrorReason(1234) == "login failed (Synology error 1234)")
+        #expect(SynologyClient.loginErrorReason(nil) == "login failed")
+    }
+
+    @Test("the share list comes back as paths")
+    func listsShares() async throws {
+        let shares = Data(
+            #"{"success":true,"data":{"shares":[{"name":"photo","path":"/photo"},{"name":"video","path":"/video"}]}}"#.utf8
+        )
+        let transport = CannedTransport(responses: ["": [shares]])
+        let client = SynologyClient(
+            config: SynologyConfig(host: "nas.local", user: "u", password: "p", folders: []),
+            transport: transport
+        )
+        try await client.login()
+        #expect(try await client.listShares() == ["/photo", "/video"])
     }
 }

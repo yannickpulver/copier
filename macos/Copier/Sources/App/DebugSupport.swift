@@ -1,6 +1,7 @@
 #if DEBUG
 
     import AppKit
+    import CopierCore
     import SwiftUI
 
     /// Debug-build helpers driven entirely by environment variables, so a test run can
@@ -31,6 +32,13 @@
         static var snapshotOpen: String? {
             let value = environment["COPIER_SNAPSHOT_OPEN"] ?? ""
             return value.isEmpty ? nil : value.lowercased()
+        }
+
+        /// Scanning is a manual step now, so a snapshot run has to ask for it to get
+        /// past `ready.png`: set `COPIER_SNAPSHOT_SCAN=1`.
+        static var startsScan: Bool {
+            let value = environment["COPIER_SNAPSHOT_SCAN"] ?? ""
+            return value == "1" || value.lowercased() == "true"
         }
 
         static var isSnapshotting: Bool { snapshotDirectory != nil }
@@ -67,6 +75,31 @@
             return windows.first { $0.title == "Copier" } ?? windows.first
         }
 
+        /// `COPIER_PROBE_NAS=1` runs the same login the Settings test button does and
+        /// prints the outcome to stderr, so the app's own network path can be checked
+        /// from a shell.
+        static func probeNAS() async {
+            guard environment["COPIER_PROBE_NAS"] == "1" else { return }
+            let configuration = await CredentialResolver.makeSynologyConfig(
+                settings: SettingsStore(defaults: defaults),
+                requireFolders: false
+            )
+            switch configuration {
+            case let .failure(problem):
+                FileHandle.standardError.write(Data("NAS probe: \(problem.message)\n".utf8))
+            case let .success(config):
+                let client = SynologyClient(config: config)
+                do {
+                    try await client.login()
+                    let shares = (try? await client.listShares()) ?? []
+                    await client.logout()
+                    FileHandle.standardError.write(Data("NAS probe: connected, shares \(shares)\n".utf8))
+                } catch {
+                    FileHandle.standardError.write(Data("NAS probe: \(error.localizedDescription)\n".utf8))
+                }
+            }
+        }
+
         /// Opens the Settings window through the standard menu action.
         @MainActor
         static func openSettings() {
@@ -82,8 +115,14 @@
                 DebugSupport.snapshot(phase)
             }
             .task {
+                await DebugSupport.probeNAS()
                 guard DebugSupport.isSnapshotting else { return }
                 DebugSupport.snapshot("launch", delay: 2)
+                if DebugSupport.startsScan {
+                    // Let the card show up first, then take the step the user would take.
+                    try? await Task.sleep(for: .seconds(3))
+                    if model.canScan { model.startScan() }
+                }
                 switch DebugSupport.snapshotOpen {
                 case "settings":
                     try? await Task.sleep(for: .seconds(3))

@@ -12,6 +12,7 @@ enum Screen: Hashable {
 struct RootView: View {
     @Bindable var backup: BackupModel
     @Bindable var sync: SyncModel
+    var router: SettingsRouter
     @State private var screen: Screen = .backup
 
     var body: some View {
@@ -21,7 +22,7 @@ struct RootView: View {
         } detail: {
             switch screen {
             case .backup:
-                BackupScreen(model: backup)
+                BackupScreen(model: backup, router: router)
             case .folderSync:
                 FolderSyncView(model: sync)
             }
@@ -123,6 +124,8 @@ private struct Sidebar: View {
     }
 }
 
+/// Card rows are plain buttons, so they draw the native-looking selected background
+/// themselves — the same rounded grey the sidebar rows above use.
 private struct CardRow: View {
     let card: RemovableVolume
     let isSelected: Bool
@@ -130,10 +133,11 @@ private struct CardRow: View {
     var body: some View {
         HStack(spacing: 7) {
             Image(systemName: "sdcard")
-                .foregroundStyle(isSelected ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
+                .foregroundStyle(isSelected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
             VStack(alignment: .leading, spacing: 1) {
                 Text(card.name)
                     .font(Theme.secondary)
+                    .fontWeight(isSelected ? .medium : .regular)
                     .lineLimit(1)
                 if card.totalBytes > 0 {
                     Text(Format.bytes(card.totalBytes))
@@ -144,29 +148,47 @@ private struct CardRow: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.vertical, 2)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 5)
+        .background {
+            if isSelected {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.primary.opacity(0.08))
+            }
+        }
+        .contentShape(.rect)
     }
 }
 
 /// Picks the view for the current phase and keeps the header consistent.
 private struct BackupScreen: View {
     @Bindable var model: BackupModel
+    var router: SettingsRouter
 
     var body: some View {
         VStack(spacing: 0) {
             switch model.phase {
             case .waiting:
                 ScreenHeader("Waiting for card", detail: "No card connected")
-                WaitingView(model: model)
+                WaitingView(model: model, router: router)
+            case .ready:
+                ScreenHeader("Card inserted", detail: "Not scanned yet")
+                ReadyView(model: model, router: router)
             case let .scanning(event):
                 ScreenHeader("Scanning", detail: model.selectedCard?.name ?? "")
-                ScanningView(model: model, event: event)
+                ScanningView(model: model, event: event, router: router)
             case .review:
-                ScreenHeader(
-                    "Review",
-                    detail: "\(model.selectedCard?.name ?? "Card") · \(Format.count(model.scan?.allFiles.count ?? 0)) files"
-                )
-                ReviewView(model: model)
+                ScreenHeader(title: "Review") {
+                    HStack(spacing: 10) {
+                        Text("\(model.selectedCard?.name ?? "Card") · \(Format.count(model.scan?.allFiles.count ?? 0)) files")
+                        // Toggling a check-location pill only takes effect on a new scan.
+                        Button("Rescan") { model.startScan() }
+                            .buttonStyle(.link)
+                            .disabled(!model.canScan)
+                            .help("Scan the card again, with the check locations selected above (⌘R).")
+                    }
+                }
+                ReviewView(model: model, router: router)
             case .copying:
                 ScreenHeader(
                     "Backing up",

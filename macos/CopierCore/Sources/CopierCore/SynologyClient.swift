@@ -26,10 +26,12 @@ public final class URLSessionSynologyTransport: NSObject, SynologyTransport, URL
         return data
     }
 
-    /// Accepts the NAS's self-signed certificate.
+    /// Accepts the NAS's self-signed certificate. A per-task delegate only gets
+    /// the task-level challenge callback, the session-level one is never called.
     final class InsecureTrustDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
         func urlSession(
             _ session: URLSession,
+            task: URLSessionTask,
             didReceive challenge: URLAuthenticationChallenge
         ) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
             guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
@@ -90,10 +92,50 @@ public actor SynologyClient {
         guard response.success, let sid = response.data?["sid"] as? String else {
             throw BackupError.nasUnreachable(
                 host: config.host,
-                reason: "login failed: error \(response.errorCode.map(String.init) ?? "unknown")"
+                reason: Self.loginErrorReason(response.errorCode)
             )
         }
         sessionID = sid
+    }
+
+    /// Synology's documented `SYNO.API.Auth` error codes, so the UI can show the real reason.
+    static func loginErrorReason(_ code: Int?) -> String {
+        switch code {
+        case 400: return "wrong user name or password"
+        case 401: return "the account is disabled"
+        case 402: return "permission denied"
+        case 403: return "a two-step verification code is required"
+        case 404: return "the two-step verification code failed"
+        case 406: return "two-step verification must be enforced"
+        case 407: return "this IP address is blocked"
+        case 408, 409, 410: return "the password is expired and must be changed"
+        case let code?: return "login failed (Synology error \(code))"
+        case nil: return "login failed"
+        }
+    }
+
+    /// The NAS's shared folders, e.g. `["/photo", "/video"]`.
+    /// Used by Settings to offer them instead of making the user type paths.
+    public func listShares() async throws -> [String] {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent("webapi/entry.cgi"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [
+            URLQueryItem(name: "api", value: "SYNO.FileStation.List"),
+            URLQueryItem(name: "version", value: "2"),
+            URLQueryItem(name: "method", value: "list_share"),
+            URLQueryItem(name: "limit", value: String(pageSize)),
+            URLQueryItem(name: "offset", value: "0"),
+            URLQueryItem(name: "_sid", value: sessionID ?? ""),
+        ]
+        guard let url = components.url else { return [] }
+
+        let response = try await perform(URLRequest(url: url))
+        guard response.success, let raw = response.data?["shares"] as? [[String: Any]] else { return [] }
+        return raw.compactMap { entry in
+            (entry["path"] as? String) ?? (entry["name"] as? String).map { "/\($0)" }
+        }
     }
 
     /// Log out and drop the session id. Failures are ignored.
@@ -165,6 +207,39 @@ public actor SynologyClient {
 
         progress?(ScanProgress(count: scanned, folder: "done"))
         return index
+    }
+
+    /// The subfolders of one folder, e.g. `listFolders(in: "/photo")` → `["/photo/2026", …]`.
+    /// Used by the Settings folder browser, so a subfolder can be picked without typing.
+    public func listFolders(in path: String) async throws -> [String] {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent("webapi/entry.cgi"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [
+            URLQueryItem(name: "api", value: "SYNO.FileStation.List"),
+            URLQueryItem(name: "version", value: "2"),
+            URLQueryItem(name: "method", value: "list"),
+            URLQueryItem(name: "folder_path", value: path),
+            URLQueryItem(name: "filetype", value: "dir"),
+            URLQueryItem(name: "limit", value: String(pageSize)),
+            URLQueryItem(name: "offset", value: "0"),
+            URLQueryItem(name: "_sid", value: sessionID ?? ""),
+        ]
+        guard let url = components.url else { return [] }
+
+        let response = try await perform(URLRequest(url: url))
+        guard response.success, let raw = response.data?["files"] as? [[String: Any]] else {
+            throw BackupError.nasUnreachable(host: config.host, reason: "could not list \(path)")
+        }
+        return raw
+            .filter { ($0["isdir"] as? Bool) ?? false }
+            .compactMap { entry in
+                (entry["path"] as? String)
+                    ?? (entry["name"] as? String).map { "\(path)/\($0)" }
+            }
+            .filter { !Matcher.isIgnored(directoryName: ($0 as NSString).lastPathComponent) }
+            .sorted(by: >)
     }
 
     // MARK: - Requests

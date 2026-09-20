@@ -11,7 +11,7 @@ The Electron UI grew into one long scrolling page. Every section is shown or hid
 ## Principles
 
 - One state at a time, with exactly one primary button: waiting, review, backing up, done.
-- Scanning starts when a card is inserted. There is no scan button.
+- A card is detected the moment it is inserted; the user picks which locations to check for existing backups and then starts the scan.
 - The file list gets the space. Settings that rarely change sit in one bar at the bottom.
 - Settings live in a native Settings window (⌘,), not in a tab.
 - Follows the system appearance. Blue is the only accent color.

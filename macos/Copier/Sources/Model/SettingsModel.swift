@@ -2,11 +2,21 @@ import CopierCore
 import Foundation
 import Observation
 
+/// What the NAS folder browser got back.
+enum BrowseOutcome: Sendable {
+    case folders([String])
+    case failed(String)
+}
+
 /// Outcome of the NAS "Test connection" button.
 enum ConnectionState: Equatable, Sendable {
     case idle
+    /// `op` is running — this can take a while, the user may have to answer a
+    /// biometric prompt in 1Password.
+    case resolving
     case testing
-    case ok
+    /// Connected; `shares` are the NAS's shared folders, offered as quick-adds.
+    case ok(shares: [String])
     case failed(String)
 }
 
@@ -15,7 +25,10 @@ enum ConnectionState: Equatable, Sendable {
 @Observable
 final class SettingsModel {
     var checkPaths: [CheckPath] {
-        didSet { store.checkPaths = checkPaths }
+        didSet {
+            store.checkPaths = checkPaths
+            locationsRevision += 1
+        }
     }
     var destinations: [String] {
         didSet { store.transferDestinations = destinations }
@@ -37,7 +50,10 @@ final class SettingsModel {
         didSet { store.synologySecure = synologySecure }
     }
     var synologyFolders: [String] {
-        didSet { store.synologyFolders = synologyFolders }
+        didSet {
+            store.synologyFolders = synologyFolders
+            locationsRevision += 1
+        }
     }
     /// Either a literal password (stored in the keychain) or an `op://` reference
     /// (stored in defaults, because a reference is not a secret).
@@ -50,6 +66,8 @@ final class SettingsModel {
     }
 
     private(set) var connection: ConnectionState = .idle
+    /// Bumped whenever something the check-location pills show has changed.
+    private(set) var locationsRevision = 0
 
     let store: SettingsStore
     private let keychain: KeychainStore
@@ -123,26 +141,106 @@ final class SettingsModel {
 
     // MARK: Connection test
 
+    /// Logs in and straight out again. Only host, user and password are needed — the
+    /// shared folders matter for scanning, not for proving the credentials work.
     func testConnection() {
-        connection = .testing
+        // Whatever is in the fields right now is what gets tested.
+        commitEdits()
+        connection = usesPasswordReference ? .resolving : .testing
         let store = self.store
         let keychain = self.keychain
         Task { [weak self] in
+            let configuration = await Task.detached {
+                await CredentialResolver.makeSynologyConfig(
+                    settings: store,
+                    keychain: keychain,
+                    requireFolders: false
+                )
+            }.value
+
+            let config: SynologyConfig
+            switch configuration {
+            case let .failure(problem):
+                await MainActor.run { self?.connection = .failed(problem.message) }
+                return
+            case let .success(resolved):
+                config = resolved
+            }
+
+            // The reference resolved; from here on it is a plain network round trip.
+            await MainActor.run { self?.connection = .testing }
             let outcome = await Task.detached { () -> ConnectionState in
-                guard let config = await CredentialResolver.synologyConfig(settings: store, keychain: keychain) else {
-                    return .failed("Host, user, password or shared folders are missing.")
-                }
                 let client = SynologyClient(config: config)
                 do {
                     try await client.login()
+                    let shares = (try? await client.listShares()) ?? []
                     await client.logout()
-                    return .ok
+                    return .ok(shares: shares)
                 } catch {
                     return .failed(error.localizedDescription)
                 }
             }.value
             await MainActor.run { self?.connection = outcome }
         }
+    }
+
+    /// `true` when the stored password is an `op://…` reference rather than a secret.
+    var usesPasswordReference: Bool {
+        CredentialResolver.isReference(synologyPassword)
+    }
+
+    /// Log in and list one folder's subfolders, for the Settings folder browser.
+    /// Root level (`nil`) returns the NAS's shares.
+    func browseFolders(in path: String?) async -> BrowseOutcome {
+        let store = self.store
+        let keychain = self.keychain
+        return await Task.detached {
+            let configuration = await CredentialResolver.makeSynologyConfig(
+                settings: store,
+                keychain: keychain,
+                requireFolders: false
+            )
+            switch configuration {
+            case let .failure(problem):
+                return .failed(problem.message)
+            case let .success(config):
+                let client = SynologyClient(config: config)
+                do {
+                    try await client.login()
+                    defer { Task { await client.logout() } }
+                    if let path {
+                        return .folders(try await client.listFolders(in: path))
+                    }
+                    return .folders(try await client.listShares())
+                } catch {
+                    return .failed(error.localizedDescription)
+                }
+            }
+        }.value
+    }
+
+    /// Flushes the text fields into the store. Called on commit, on focus loss and
+    /// before a connection test, so a test never runs against stale values.
+    func commitEdits() {
+        store.synologyHost = synologyHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        store.synologyUser = synologyUser.trimmingCharacters(in: .whitespacesAndNewlines)
+        store.synologyPort = synologyPort
+        store.synologySecure = synologySecure
+        storePassword(synologyPassword)
+        locationsRevision += 1
+    }
+
+    /// `true` once the NAS can be talked to at all.
+    var isNASConfigured: Bool {
+        !synologyHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !synologyUser.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !synologyPassword.isEmpty
+    }
+
+    /// Shares the last successful test found that are not indexed yet.
+    var suggestedShares: [String] {
+        guard case let .ok(shares) = connection else { return [] }
+        return shares.filter { !synologyFolders.contains($0) }
     }
 }
 

@@ -7,6 +7,8 @@ enum ProcessRunner {
         var status: Int32
         var standardOutput: Data
         var standardError: String
+        /// `true` when the child was killed because it outlived `timeout`.
+        var timedOut: Bool = false
     }
 
     /// Run an executable and return stdout, or `nil` when it fails / times out.
@@ -17,11 +19,20 @@ enum ProcessRunner {
         return result.standardOutput
     }
 
-    static func runCapturing(executable: String, arguments: [String], timeout: TimeInterval) -> Result? {
+    /// - Parameter environment: replaces the child's environment when given.
+    /// - Returns: `nil` only when the process could not be started; a timeout comes
+    ///   back as a result with ``Result/timedOut`` set, so callers can tell them apart.
+    static func runCapturing(
+        executable: String,
+        arguments: [String],
+        timeout: TimeInterval,
+        environment: [String: String]? = nil
+    ) -> Result? {
         guard FileManager.default.isExecutableFile(atPath: executable) else { return nil }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
+        if let environment { process.environment = environment }
         let out = Pipe()
         let err = Pipe()
         process.standardOutput = out
@@ -55,7 +66,12 @@ enum ProcessRunner {
             }
             if process.isRunning { kill(process.processIdentifier, SIGKILL) }
             _ = group.wait(timeout: .now() + 2)
-            return nil
+            return Result(
+                status: -1,
+                standardOutput: outDrain.data,
+                standardError: String(data: errDrain.data, encoding: .utf8) ?? "",
+                timedOut: true
+            )
         }
         process.waitUntilExit()
         _ = group.wait(timeout: .now() + 2)

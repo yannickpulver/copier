@@ -78,6 +78,31 @@ private struct EverythingBackedUp: BackupIndexSource {
     }
 }
 
+/// Reports only the named files as already backed up.
+private struct FilesBackedUp: BackupIndexSource {
+    let name = "Fake NAS"
+    let kind = SourceKind.local
+    let isFallbackOnly = false
+    let folder: URL
+    let names: Set<String>
+
+    init(folder: URL, names: [String]) {
+        self.folder = folder
+        self.names = Set(names)
+    }
+
+    func index(
+        targetKeys: Set<FileKey>,
+        progress: (@Sendable (ScanProgress) -> Void)?
+    ) async throws -> LocationIndex {
+        var index = LocationIndex()
+        for key in targetKeys where names.contains(key.name) {
+            index.add(key, folder: folder)
+        }
+        return index
+    }
+}
+
 /// A throwaway temp tree: a card with dated files plus an empty destination.
 private struct Fixture {
     let root: URL
@@ -154,6 +179,12 @@ private func isReview(_ model: BackupModel) -> Bool {
 }
 
 @MainActor
+private func isReady(_ model: BackupModel) -> Bool {
+    if case .ready = model.phase { return true }
+    return false
+}
+
+@MainActor
 private func isDone(_ model: BackupModel) -> Bool {
     if case .done = model.phase { return true }
     return false
@@ -178,6 +209,12 @@ struct BackupModelTests {
         #expect(isReview(model) == false)
         await model.refreshCards()
         #expect(model.cards.count == 1)
+        // A card that appears is offered, not scanned.
+        #expect(isReady(model))
+        #expect(model.scan == nil)
+        #expect(model.days.isEmpty)
+
+        model.startScan()
         try await wait(for: model, until: isReview)
 
         #expect(model.days.count == 2)
@@ -193,6 +230,7 @@ struct BackupModelTests {
         defer { fixture.remove() }
         let model = makeModel(fixture)
         await model.refreshCards()
+        model.startScan()
         try await wait(for: model, until: isReview)
 
         let firstDay = model.days[0]
@@ -217,6 +255,7 @@ struct BackupModelTests {
         defer { fixture.remove() }
         let model = makeModel(fixture)
         await model.refreshCards()
+        model.startScan()
         try await wait(for: model, until: isReview)
 
         model.setTitle("Wedding", for: model.days[0])
@@ -240,6 +279,7 @@ struct BackupModelTests {
         defer { fixture.remove() }
         let model = makeModel(fixture)
         await model.refreshCards()
+        model.startScan()
         try await wait(for: model, until: isReview)
 
         model.structure = .oneFolder
@@ -262,6 +302,7 @@ struct BackupModelTests {
         defer { fixture.remove() }
         let model = makeModel(fixture)
         await model.refreshCards()
+        model.startScan()
         try await wait(for: model, until: isReview)
 
         model.cameraSubfolders = true
@@ -275,6 +316,7 @@ struct BackupModelTests {
         defer { fixture.remove() }
         let model = makeModel(fixture, freeBytes: 500)
         await model.refreshCards()
+        model.startScan()
         try await wait(for: model, until: isReview)
 
         model.startBackup()
@@ -291,6 +333,7 @@ struct BackupModelTests {
         defer { fixture.remove() }
         let model = makeModel(fixture, sources: [EverythingBackedUp(folder: fixture.destination)])
         await model.refreshCards()
+        model.startScan()
         try await wait(for: model, until: isReview)
 
         #expect(model.allBackedUp)
@@ -305,6 +348,7 @@ struct BackupModelTests {
         defer { fixture.remove() }
         let model = makeModel(fixture)
         await model.refreshCards()
+        model.startScan()
         try await wait(for: model, until: isReview)
 
         model.setTitle("Wedding", for: model.days[0])
@@ -325,6 +369,7 @@ struct BackupModelTests {
         let transfer = GatedTransfer()
         let model = makeModel(fixture, transfer: transfer)
         await model.refreshCards()
+        model.startScan()
         try await wait(for: model, until: isReview)
 
         model.startBackup()
@@ -347,6 +392,7 @@ struct BackupModelTests {
 
         let model = makeModel(fixture)
         await model.refreshCards()
+        model.startScan()
         try await wait(for: model, until: isReview)
 
         #expect(model.target(for: model.days[0]) == .existing(existing))
@@ -361,6 +407,7 @@ struct BackupModelTests {
         let missing = CheckPath(path: fixture.root.appendingPathComponent("not-mounted").path)
         let model = makeModel(fixture, sources: [LocalPathSource(missing)])
         await model.refreshCards()
+        model.startScan()
         try await wait(for: model, until: isReview)
 
         #expect(model.failedSources.count == 1)
@@ -376,6 +423,7 @@ struct BackupModelTests {
         let transfer = GatedTransfer()
         let model = makeModel(fixture, transfer: transfer)
         await model.refreshCards()
+        model.startScan()
         try await wait(for: model, until: isReview)
 
         let card = try #require(model.selectedCard)
@@ -398,6 +446,7 @@ struct BackupModelTests {
         defer { fixture.remove() }
         let model = makeModel(fixture)
         await model.refreshCards()
+        model.startScan()
         try await wait(for: model, until: isReview)
 
         model.cameraSubfolders = true
@@ -413,5 +462,138 @@ struct BackupModelTests {
                 atPath: fixture.destination.appendingPathComponent("2026.09.18 - Wedding/Unknown/IMG_0001.JPG").path
             )
         )
+    }
+
+    @Test("inserting a card never starts a scan on its own")
+    func insertingACardDoesNotScan() async throws {
+        let fixture = try Fixture(days: Self.twoDays)
+        defer { fixture.remove() }
+        let model = makeModel(fixture)
+        await model.refreshCards()
+
+        #expect(isReady(model))
+        #expect(model.canScan)
+        // Give an accidental auto-scan time to show up.
+        try await Task.sleep(for: .milliseconds(120))
+        #expect(isReady(model))
+        #expect(model.scan == nil)
+    }
+
+    @Test("a deselected location is skipped by the next scan")
+    func disabledLocationIsSkipped() async throws {
+        let fixture = try Fixture(days: Self.twoDays)
+        defer { fixture.remove() }
+        let library = fixture.root.appendingPathComponent("library")
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        let source = EverythingBackedUp(folder: library)
+
+        let model = makeModel(fixture, sources: [source])
+        await model.refreshCards()
+        model.startScan()
+        try await wait(for: model, until: isReview)
+        #expect(model.tickedCount == 0) // everything was found in the source
+
+        let location = LocationStatus(
+            sourceName: source.name,
+            displayName: source.name,
+            detail: library.path,
+            isNAS: false,
+            isFallback: false,
+            reachable: true
+        )
+        model.toggleLocation(location)
+        #expect(model.isDisabled(location))
+
+        model.startScan()
+        try await wait(for: model, until: { model in
+            if case .review = model.phase { return model.tickedCount > 0 }
+            return false
+        })
+        #expect(model.scan?.sources.isEmpty == true)
+        #expect(model.tickedCount == 4) // nothing was checked, so everything is new
+    }
+
+    @Test("after a failure the card goes back to ready, not straight into a scan")
+    func retryReturnsToReady() async throws {
+        let fixture = try Fixture(days: Self.twoDays)
+        defer { fixture.remove() }
+        let transfer = GatedTransfer()
+        let model = makeModel(fixture, transfer: transfer)
+        await model.refreshCards()
+        model.startScan()
+        try await wait(for: model, until: isReview)
+
+        model.startBackup()
+        try await wait(for: model, until: { $0.isCopying })
+        model.volumeUnmounted(fixture.card)
+        await model.refreshCards()
+        model.retry()
+
+        #expect(isReady(model))
+        #expect(model.scan == nil)
+    }
+
+    @Test("days with nothing new are sorted into a second block, collapsed and unticked")
+    func backedUpDaysSortLast() async throws {
+        let fixture = try Fixture(days: Self.twoDays)
+        defer { fixture.remove() }
+        // The 18th is already on the "NAS", the 19th is not.
+        let library = fixture.root.appendingPathComponent("library")
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        let source = FilesBackedUp(folder: library, names: ["IMG_0001.JPG", "IMG_0002.JPG"])
+
+        let model = makeModel(fixture, sources: [source])
+        await model.refreshCards()
+        model.startScan()
+        try await wait(for: model, until: isReview)
+
+        #expect(model.days.map(\.id) == ["2026-09-18", "2026-09-19"])
+        // Active day first, settled day after it.
+        #expect(model.orderedDays.map(\.id) == ["2026-09-19", "2026-09-18"])
+        #expect(model.isBackedUpOnly(model.days[0]))
+        #expect(model.isBackedUpOnly(model.days[1]) == false)
+        #expect(model.expandedDayID == "2026-09-19")
+
+        let settled = try #require(model.orderedDays.last)
+        #expect(settled.backedUpNote == "All 2 files backed up · 1 other")
+
+        // Ticking a file in a settled day moves it back into the first block.
+        let file = try #require(settled.files.first { $0.reason == .backedUp })
+        model.setTicked(file, true)
+        #expect(model.orderedDays.map(\.id) == ["2026-09-18", "2026-09-19"])
+        #expect(model.isBackedUpOnly(settled) == false)
+    }
+
+    @Test("a volume that holds a check location or destination is not a card")
+    func configuredVolumesAreNotCards() async throws {
+        let volume = RemovableVolume(name: "YANU-SSD-1", url: URL(fileURLWithPath: "/Volumes/YANU-SSD-1"))
+        let other = RemovableVolume(name: "SONY_A7IV", url: URL(fileURLWithPath: "/Volumes/SONY_A7IV"))
+
+        // Exact match, a folder inside it, and a trailing slash all disqualify it.
+        #expect(BackupModel.isCard(volume, excluding: ["/Volumes/YANU-SSD-1"]) == false)
+        #expect(BackupModel.isCard(volume, excluding: ["/Volumes/YANU-SSD-1/Photos/2026"]) == false)
+        #expect(BackupModel.isCard(volume, excluding: ["/Volumes/YANU-SSD-1/"]) == false)
+        // A different volume, and a similarly named one, stay cards.
+        #expect(BackupModel.isCard(other, excluding: ["/Volumes/YANU-SSD-1/Photos"]))
+        #expect(BackupModel.isCard(volume, excluding: ["/Volumes/YANU-SSD-10/Photos"]))
+        #expect(BackupModel.isCard(other, excluding: []))
+    }
+
+    @Test("adding the card's volume as a check path removes it from the card list")
+    func configuredCardDisappears() async throws {
+        let fixture = try Fixture(days: Self.twoDays)
+        defer { fixture.remove() }
+        let model = makeModel(fixture)
+        await model.refreshCards()
+        #expect(model.cards.count == 1)
+        #expect(isReady(model))
+
+        // The user makes the card's own folder a destination.
+        model.dependencies.settings.transferDestinations = [fixture.card.appendingPathComponent("DCIM").path]
+        await model.refreshCards()
+
+        #expect(model.cards.isEmpty)
+        #expect(model.selectedCard == nil)
+        if case .waiting = model.phase {} else { Issue.record("expected waiting, got \(model.phase)") }
     }
 }

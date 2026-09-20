@@ -8,6 +8,7 @@ struct CopierApp: App {
     @State private var backup: BackupModel
     @State private var sync: SyncModel
     @State private var settings: SettingsModel
+    @State private var router = SettingsRouter()
 
     init() {
         #if DEBUG
@@ -32,16 +33,34 @@ struct CopierApp: App {
 
     var body: some Scene {
         Window("Copier", id: "main") {
-            RootView(backup: backup, sync: sync)
+            RootView(backup: backup, sync: sync, router: router)
                 .frame(minWidth: 920, minHeight: 620)
+                // Settings changes (locations, NAS) must show up in the pills.
+                .onChange(of: settings.locationsRevision) { _, _ in
+                    backup.reloadLocations()
+                    // A volume that just became a check location or destination is no
+                    // longer a card, so the list has to be filtered again.
+                    Task {
+                        await backup.refreshCards()
+                        await backup.checkLocations()
+                    }
+                }
         }
         .defaultSize(width: 1040, height: 700)
         .commands {
             CommandGroup(replacing: .newItem) {}
+            CommandGroup(after: .toolbar) {
+                Button("Scan Card") { backup.startScan() }
+                    .keyboardShortcut("r", modifiers: .command)
+                    .disabled(!backup.canScan)
+                Button("Scan Without Duplicate Check") { backup.startScan(skipCheck: true) }
+                    .keyboardShortcut("r", modifiers: [.command, .shift])
+                    .disabled(!backup.canScan)
+            }
         }
 
         Settings {
-            SettingsWindow(model: settings)
+            SettingsWindow(model: settings, router: router)
         }
     }
 

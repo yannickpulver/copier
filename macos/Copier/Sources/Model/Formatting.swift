@@ -19,6 +19,12 @@ enum Format {
         return date.formatted(.dateTime.day().month(.abbreviated).year())
     }
 
+    /// `Sat 23 May 2026` — the weekday makes a day easy to place at a glance.
+    static func dayWithWeekday(_ day: Day?) -> String {
+        guard let day, let date = day.startOfDay() else { return "No capture date" }
+        return date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).year())
+    }
+
     /// `09:12`.
     static func time(_ date: Date?) -> String {
         guard let date else { return "—" }
@@ -30,6 +36,13 @@ enum Format {
         let dates = files.compactMap { $0.captureDate ?? $0.modificationDate }
         guard let first = dates.min(), let last = dates.max() else { return "" }
         return "\(time(first))–\(time(last))"
+    }
+
+    /// `10:00 – 10:42`, or `No capture time` for undated files.
+    static func span(from start: Date?, to end: Date?) -> String {
+        guard let start else { return "No capture time" }
+        guard let end, end != start else { return time(start) }
+        return "\(time(start)) – \(time(end))"
     }
 
     /// `42.3 MB/s`.

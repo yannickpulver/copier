@@ -1,20 +1,40 @@
 import CopierCore
 import SwiftUI
 
-/// Screen 2 — what will be copied where. Day groups, one open day with its file list,
+extension FileKind {
+    /// Muted system colours, one per kind, used by the row badge and the header dots.
+    var color: Color {
+        switch self {
+        case .photo: return Color(nsColor: .systemBlue)
+        case .raw: return Color(nsColor: .systemIndigo)
+        case .video: return Color(nsColor: .systemPurple)
+        case .other: return Color(nsColor: .systemGray)
+        }
+    }
+}
+
+/// Screen 2 — what will be copied where. Day blocks, time clusters inside the open day,
 /// and the bottom bar with destination, camera subfolders, total and the primary action.
 struct ReviewView: View {
     @Bindable var model: BackupModel
+    var router: SettingsRouter
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 14) {
+            CheckLocationsRow(model: model, router: router)
+                .padding(.horizontal, 22)
+                .padding(.top, 14)
+                .padding(.bottom, 12)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 12) {
                 header
 
                 ForEach(model.failedSources, id: \.name) { source in
                     InlineBanner(
                         kind: .warning,
-                        message: "\(source.name) was not checked — \(source.errorDescription ?? "no connection"). Files from it may be copied again.",
+                        message: "\(source.name) was not checked — \(source.errorDescription ?? "no connection"). Its pill above is grey, and files stored there look new.",
                         actionTitle: "Retry",
                         action: { model.startScan() }
                     )
@@ -33,7 +53,8 @@ struct ReviewView: View {
                 }
             }
             .padding(.horizontal, 22)
-            .padding(.vertical, 18)
+            .padding(.top, 14)
+            .padding(.bottom, 14)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
             if let shortfall = model.shortfall {
@@ -54,7 +75,7 @@ struct ReviewView: View {
     private var header: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
-                Text("\(Format.count(model.tickedCount)) new file\(model.tickedCount == 1 ? "" : "s") on \(model.selectedCard?.name ?? "card")")
+                Text("\(Format.count(model.tickedCount)) file\(model.tickedCount == 1 ? "" : "s") selected on \(model.selectedCard?.name ?? "card")")
                     .font(Theme.sectionTitle)
                     .lineLimit(1)
                 Text(model.reviewSubtitle)
@@ -113,17 +134,32 @@ struct ReviewView: View {
 
     private var dayList: some View {
         VStack(spacing: 0) {
-            ForEach(Array(model.days.enumerated()), id: \.element.id) { index, day in
-                if index > 0 { Divider() }
+            ForEach(Array(model.orderedDays.enumerated()), id: \.element.id) { index, day in
+                let isSettled = model.isBackedUpOnly(day)
+                // The first fully backed-up day opens the second block.
+                let startsSettledBlock = isSettled
+                    && (index == 0 || !model.isBackedUpOnly(model.orderedDays[index - 1]))
+
+                if startsSettledBlock {
+                    HStack(spacing: 8) {
+                        SectionLabel(text: "Already backed up")
+                        VStack { Divider() }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.top, 10)
+                    .padding(.bottom, 2)
+                } else if index > 0 {
+                    Divider()
+                }
+
                 let isExpanded = model.expandedDayID == day.id
-                VStack(spacing: 9) {
-                    DayHeaderRow(model: model, day: day, isExpanded: isExpanded)
+                VStack(spacing: 0) {
+                    DayHeaderRow(model: model, day: day, isExpanded: isExpanded, isSettled: isSettled)
                     if isExpanded {
+                        Divider()
                         FileList(model: model, day: day)
                     }
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
                 .frame(maxHeight: isExpanded ? .infinity : nil)
             }
         }
@@ -133,10 +169,13 @@ struct ReviewView: View {
 
 // MARK: - Day header
 
+/// The tinted band that separates one day from the next.
 private struct DayHeaderRow: View {
     @Bindable var model: BackupModel
     let day: ReviewDay
     let isExpanded: Bool
+    /// A day with nothing to copy: no band, greyed, no folder field.
+    var isSettled: Bool = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -158,14 +197,18 @@ private struct DayHeaderRow: View {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(.secondary)
-                    Text(Format.day(day.day))
-                        .font(Theme.bodySemibold)
+                    Text(Format.dayWithWeekday(day.day))
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(isSettled ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
                     let range = Format.timeRange(day.files.map(\.file))
                     if !range.isEmpty {
                         Text(range)
-                            .font(Theme.secondary)
+                            .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2)
+                            .background(.quaternary, in: .capsule)
                     }
                 }
                 .fixedSize()
@@ -173,7 +216,14 @@ private struct DayHeaderRow: View {
             }
             .buttonStyle(.plain)
 
-            if model.structure == .folderPerDay {
+            if isSettled {
+                // Nothing to copy here, so there is no folder to choose either.
+                Text(day.backedUpNote)
+                    .font(Theme.secondary)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+            } else if model.structure == .folderPerDay {
                 FolderField(model: model, day: day)
             } else {
                 Spacer(minLength: 8)
@@ -181,14 +231,36 @@ private struct DayHeaderRow: View {
 
             // The counts column is the first thing to give way in a narrow window.
             ViewThatFits(in: .horizontal) {
-                Text(Format.mediaCounts(day.files.map(\.file)))
-                    .font(Theme.secondary)
-                    .foregroundStyle(.secondary)
-                    .fixedSize()
-                Text("")
+                KindCounts(counts: day.kindCounts)
+                EmptyView()
+            }
+            .opacity(isSettled ? 0.55 : 1)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(isSettled ? AnyShapeStyle(.clear) : AnyShapeStyle(Color.accentColor.opacity(0.07)))
+    }
+}
+
+/// `● 112 photos  ● 36 videos` — the colours match the row badges.
+private struct KindCounts: View {
+    let counts: [(kind: FileKind, count: Int)]
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ForEach(counts, id: \.kind) { entry in
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(entry.kind.color)
+                        .frame(width: 6, height: 6)
+                    Text("\(entry.count) \(entry.kind.label(count: entry.count))")
+                        .font(Theme.secondary)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
             }
         }
-        .frame(height: 30)
+        .fixedSize()
     }
 }
 
@@ -200,15 +272,49 @@ private struct FileList: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(spacing: 0) {
-                ForEach(day.files) { file in
-                    FileRow(model: model, file: file)
+            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                ForEach(day.clusters) { cluster in
+                    Section {
+                        ForEach(cluster.files) { file in
+                            FileRow(model: model, file: file)
+                        }
+                        Spacer(minLength: 10)
+                    } header: {
+                        ClusterHeader(cluster: cluster)
+                    }
                 }
             }
+            .padding(.horizontal, 14)
+            .padding(.bottom, 8)
         }
-        .padding(.leading, 24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityLabel("Files from \(Format.day(day.day))")
+    }
+}
+
+/// `10:00 – 10:42 · 18 files`, pinned while its cluster scrolls past.
+private struct ClusterHeader: View {
+    let cluster: FileCluster
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(Format.span(from: cluster.start, to: cluster.end))
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+            Text("·")
+                .font(.system(size: 11))
+                .foregroundStyle(.tertiary)
+            Text("\(Format.count(cluster.files.count)) file\(cluster.files.count == 1 ? "" : "s")")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 8)
+        .padding(.bottom, 4)
+        .background(Theme.surface)
+        .overlay(alignment: .bottom) { Divider() }
     }
 }
 
@@ -224,6 +330,13 @@ private struct FileRow: View {
                 .toggleStyle(.checkbox)
                 .accessibilityLabel("Include \(file.file.name)")
 
+            Image(systemName: file.file.kind.symbolName)
+                .font(.system(size: 10))
+                .foregroundStyle(file.file.kind.color)
+                .frame(width: 14)
+                .opacity(isOn ? 1 : 0.55)
+                .help(file.file.kind.rawValue)
+
             Text(file.file.name)
                 .font(Theme.mono)
                 .lineLimit(1)
@@ -235,11 +348,10 @@ private struct FileRow: View {
                 TagChip(text: file.reason.rawValue)
             }
 
-            Text(file.file.camera ?? "")
-                .font(Theme.secondary)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .frame(width: 110, alignment: .leading)
+            if let camera = file.file.camera, !camera.isEmpty {
+                TagChip(text: camera)
+                    .lineLimit(1)
+            }
 
             Text(Format.time(file.file.captureDate ?? file.file.modificationDate))
                 .font(Theme.secondary)
@@ -253,7 +365,7 @@ private struct FileRow: View {
                 .monospacedDigit()
                 .frame(width: 70, alignment: .trailing)
         }
-        .frame(height: 22)
+        .frame(height: 24)
     }
 }
 
@@ -311,8 +423,9 @@ private struct BottomBar: View {
             ForEach(model.dependencies.settings.transferDestinations, id: \.self) { path in
                 Button(path) { model.setDestination(URL(fileURLWithPath: path)) }
             }
-            Divider()
-            Button("Choose…") {
+            if !model.dependencies.settings.transferDestinations.isEmpty { Divider() }
+            // Always reachable, so an empty destination list is never a dead end.
+            Button("Add destination…") {
                 if let url = FolderPanel.chooseFolder(title: "Choose a backup destination", start: model.destination) {
                     model.setDestination(url)
                 }

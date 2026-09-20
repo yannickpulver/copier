@@ -67,6 +67,9 @@ let project = Project(
                 "LSApplicationCategoryType": "public.app-category.photography",
                 "LSMinimumSystemVersion": "$(MACOSX_DEPLOYMENT_TARGET)",
                 "NSHumanReadableCopyright": "© Yannick Pulver",
+                // The NAS host is user-configured and ships a self-signed certificate,
+                // so App Transport Security can't be scoped to a domain exception.
+                "NSAppTransportSecurity": ["NSAllowsArbitraryLoads": true],
                 "NSRemovableVolumesUsageDescription":
                     "Copier reads the photos and videos on your memory cards so it can back them up.",
                 "NSNetworkVolumesUsageDescription":
