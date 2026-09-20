@@ -183,4 +183,26 @@ struct SettingsStoreTests {
         #expect(store.checkPaths.isEmpty)
         #expect(store.dateFormat == "YYYY.MM.DD")
     }
+
+    @Test("syncSources round-trips a list")
+    func syncSourcesRoundTrip() throws {
+        let (store, _) = try makeStore()
+        store.syncSources = ["/src/A", "/src/B"]
+        #expect(store.syncSources == ["/src/A", "/src/B"])
+    }
+
+    @Test("syncSources falls back to the legacy syncSource when the list key is unset")
+    func syncSourcesFallsBackToLegacy() throws {
+        let (store, _) = try makeStore()
+        store.syncSource = "/src/legacy"
+        #expect(store.syncSources == ["/src/legacy"])
+    }
+
+    @Test("an explicit empty syncSources list means no sources, and does not fall back")
+    func syncSourcesExplicitEmptyDoesNotFallBack() throws {
+        let (store, _) = try makeStore()
+        store.syncSource = "/src/legacy"
+        store.syncSources = []
+        #expect(store.syncSources.isEmpty)
+    }
 }

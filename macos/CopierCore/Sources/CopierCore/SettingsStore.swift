@@ -19,6 +19,7 @@ public final class SettingsStore: @unchecked Sendable {
         public static let synologyFolders = "copier.synologyFolders"
         public static let dateFormat = "copier.dateFormat"
         public static let syncSource = "copier.syncSource"
+        public static let syncSources = "copier.syncSources"
         public static let syncTarget = "copier.syncTarget"
         public static let syncAppendSourceName = "copier.syncAppendSourceName"
         public static let cameraSubfolders = "copier.cameraSubfolders"
@@ -125,6 +126,19 @@ public final class SettingsStore: @unchecked Sendable {
         set { defaults.set(newValue, forKey: Key.syncSource) }
     }
 
+    /// Source folders for Folder Sync. Falls back to the legacy single ``syncSource``
+    /// only when the list key was never set at all — an explicit empty list means
+    /// "no sources" and does not fall back.
+    public var syncSources: [String] {
+        get {
+            if defaults.object(forKey: Key.syncSources) == nil {
+                return syncSource.map { [$0] } ?? []
+            }
+            return defaults.stringArray(forKey: Key.syncSources) ?? []
+        }
+        set { defaults.set(newValue, forKey: Key.syncSources) }
+    }
+
     public var syncTarget: String? {
         get { defaults.string(forKey: Key.syncTarget) }
         set { defaults.set(newValue, forKey: Key.syncTarget) }
@@ -142,7 +156,7 @@ public final class SettingsStore: @unchecked Sendable {
             Key.checkPaths, Key.transferDestinations, Key.selectedDestination,
             Key.synologyHost, Key.synologyPort, Key.synologyUser, Key.synologyPassword,
             Key.synologySecure, Key.synologyFolders, Key.dateFormat, Key.syncSource,
-            Key.syncTarget, Key.syncAppendSourceName, Key.cameraSubfolders, Key.structure,
+            Key.syncSources, Key.syncTarget, Key.syncAppendSourceName, Key.cameraSubfolders, Key.structure,
         ]
         for key in keys { defaults.removeObject(forKey: key) }
     }

@@ -1,7 +1,7 @@
 import CopierCore
 import SwiftUI
 
-/// Folder Sync — source and target side by side, what is missing, one button.
+/// Folder Sync — one or more sources and a target side by side, what is missing, one button.
 struct FolderSyncView: View {
     @Bindable var model: SyncModel
 
@@ -10,23 +10,27 @@ struct FolderSyncView: View {
             ScreenHeader("Folder Sync", detail: "Compared by name and size")
 
             VStack(alignment: .leading, spacing: 18) {
-                HStack(spacing: 14) {
-                    FolderCard(
-                        label: "Source",
-                        url: model.source,
-                        count: model.sourceCount,
-                        choose: {
-                            if let url = FolderPanel.chooseFolder(title: "Choose the source folder", start: model.source) {
-                                model.source = url
-                            }
+                HStack(alignment: .top, spacing: 14) {
+                    SourcesCard(
+                        sources: model.sources,
+                        results: model.results,
+                        isBusy: model.isBusy,
+                        remove: { model.removeSource($0) },
+                        add: {
+                            let urls = FolderPanel.chooseFolders(
+                                title: "Choose source folders",
+                                start: model.sources.last?.deletingLastPathComponent() ?? model.target
+                            )
+                            if !urls.isEmpty { model.addSources(urls) }
                         }
                     )
                     Image(systemName: "arrow.right")
                         .foregroundStyle(.secondary)
                     FolderCard(
                         label: "Target",
-                        url: model.effectiveTarget,
-                        count: model.targetCount,
+                        url: targetURL,
+                        countText: targetCountText,
+                        isBusy: model.isBusy,
                         choose: {
                             if let url = FolderPanel.chooseFolder(title: "Choose the target folder", start: model.target) {
                                 model.target = url
@@ -36,9 +40,11 @@ struct FolderSyncView: View {
                 }
 
                 HStack(spacing: 18) {
-                    Toggle("Add source folder name to target", isOn: $model.appendSourceName)
-                        .toggleStyle(.checkbox)
-                        .font(Theme.secondary)
+                    if model.sources.count <= 1 {
+                        Toggle("Add source folder name to target", isOn: $model.appendSourceName)
+                            .toggleStyle(.checkbox)
+                            .font(Theme.secondary)
+                    }
                     Toggle("Sync Finder tags", isOn: $model.syncFinderTags)
                         .toggleStyle(.checkbox)
                         .font(Theme.secondary)
@@ -125,6 +131,19 @@ struct FolderSyncView: View {
         return message
     }
 
+    /// The Target card's path: the raw target once there is more than one source
+    /// (each source gets its own subfolder), otherwise the resolved single-source destination.
+    private var targetURL: URL? {
+        model.sources.count > 1 ? model.target : model.effectiveTarget
+    }
+
+    /// The Target card's count line: "N folders inside" for several sources,
+    /// otherwise the target's own file count.
+    private var targetCountText: String? {
+        if model.sources.count > 1 { return "\(Format.count(model.sources.count)) folders inside" }
+        return model.targetCount.map { "\(Format.count($0)) files" }
+    }
+
     /// `20 new, 4 replaced` — the target files that get overwritten are called out,
     /// because a "different" file is replaced, not added.
     private var changeSummary: String {
@@ -136,7 +155,7 @@ struct FolderSyncView: View {
 
     @ViewBuilder
     private var comparedContent: some View {
-        let files = model.filesToCopy
+        let files = model.displayFiles
         if files.isEmpty, model.tagUpdates.isEmpty {
             InlineBanner(kind: .warning, message: "Everything in the source is already in the target.")
         } else {
@@ -150,7 +169,7 @@ struct FolderSyncView: View {
                     ForEach(Array(files.prefix(5).enumerated()), id: \.offset) { index, file in
                         if index > 0 { Divider() }
                         HStack(spacing: 12) {
-                            Text(file.relativePath)
+                            Text(file.path)
                                 .font(Theme.mono)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
@@ -211,36 +230,111 @@ struct FolderSyncView: View {
     }
 }
 
+/// Dashed-border card chrome shared by ``FolderCard`` and ``SourcesCard``.
+private struct DashedCard<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        content
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.surface)
+            .clipShape(.rect(cornerRadius: Theme.listRadius))
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.listRadius)
+                    .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                    .foregroundStyle(Theme.hairline)
+            )
+    }
+}
+
 private struct FolderCard: View {
     let label: String
     let url: URL?
-    let count: Int?
+    let countText: String?
+    var isBusy: Bool = false
     let choose: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SectionLabel(text: label)
-            Text(url?.path ?? "Not chosen")
-                .font(Theme.mono)
-                .foregroundStyle(url == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
-                .lineLimit(2)
-                .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Text(count.map { "\(Format.count($0)) files" } ?? " ")
-                .font(Theme.secondary)
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
-            Button("Choose…", action: choose)
+        DashedCard {
+            VStack(alignment: .leading, spacing: 10) {
+                SectionLabel(text: label)
+                Text(url?.path ?? "Not chosen")
+                    .font(Theme.mono)
+                    .foregroundStyle(url == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text(countText ?? " ")
+                    .font(Theme.secondary)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                Button("Choose…", action: choose)
+                    .disabled(isBusy)
+            }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.surface)
-        .clipShape(.rect(cornerRadius: Theme.listRadius))
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.listRadius)
-                .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
-                .foregroundStyle(Theme.hairline)
-        )
+    }
+}
+
+/// The Source side once several folders can be chosen: one row per folder, with a
+/// per-row file count (once compared) and a remove button, plus an "Add…" button.
+private struct SourcesCard: View {
+    let sources: [URL]
+    let results: [SyncModel.SourceResult]
+    let isBusy: Bool
+    let remove: (URL) -> Void
+    let add: () -> Void
+
+    var body: some View {
+        DashedCard {
+            VStack(alignment: .leading, spacing: 10) {
+                SectionLabel(text: "Sources")
+                if sources.isEmpty {
+                    Text("Not chosen")
+                        .font(Theme.mono)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else if sources.count > Self.scrollThreshold {
+                    // A long list scrolls; a short one hugs its rows so the card stays compact.
+                    ScrollView { rows }
+                        .frame(height: 160)
+                } else {
+                    rows
+                }
+                Button("Add…", action: add)
+                    .disabled(isBusy)
+            }
+        }
+    }
+
+    private static let scrollThreshold = 6
+
+    private var rows: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(sources, id: \.path) { source in
+                HStack(spacing: 8) {
+                    Text(source.path)
+                        .font(Theme.mono)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if let count = results.first(where: { $0.source.path == source.path })?.sourceCount {
+                        Text("\(Format.count(count)) files")
+                            .font(Theme.secondary)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                    Button {
+                        remove(source)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .disabled(isBusy)
+                }
+            }
+        }
     }
 }
