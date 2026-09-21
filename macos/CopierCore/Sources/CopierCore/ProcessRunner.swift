@@ -46,13 +46,20 @@ enum ProcessRunner {
 
         // Both pipes are drained in parallel: reading one to EOF first deadlocks as
         // soon as the child fills the other pipe's 64 KB buffer, and the timeout loop
-        // below would never be reached.
+        // below would never be reached. Dedicated threads, not a GCD queue: under load
+        // (CI runs every test in parallel) queued blocks can start seconds late, and a
+        // bounded wait below then returned before anything had been read.
         let outDrain = PipeDrain(out.fileHandleForReading)
         let errDrain = PipeDrain(err.fileHandleForReading)
         let group = DispatchGroup()
-        let queue = DispatchQueue(label: "copier.process-runner", attributes: .concurrent)
-        queue.async(group: group) { outDrain.run() }
-        queue.async(group: group) { errDrain.run() }
+        for drain in [outDrain, errDrain] {
+            group.enter()
+            let thread = Thread {
+                drain.run()
+                group.leave()
+            }
+            thread.start()
+        }
 
         let deadline = Date().addingTimeInterval(timeout)
         while process.isRunning, Date() < deadline {
@@ -74,7 +81,9 @@ enum ProcessRunner {
             )
         }
         process.waitUntilExit()
-        _ = group.wait(timeout: .now() + 2)
+        // The child has exited and closed its ends, so EOF follows promptly; the bound
+        // only guards against a grandchild that inherited the pipes.
+        _ = group.wait(timeout: .now() + max(timeout, 5))
         return Result(
             status: process.terminationStatus,
             standardOutput: outDrain.data,
