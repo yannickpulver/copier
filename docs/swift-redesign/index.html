@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Copier Swift Redesign</title>
+<style>
+:root{--bg:#F5F6F8;--text:#16181D;--text2:#565B66;--line:#DADDE3;--accent:#1D5FD1}
+@media (prefers-color-scheme: dark){:root{--bg:#1B1C1F;--text:#F0F1F4;--text2:#A3A8B3;--line:#393C43;--accent:#6BA4FF}}
+body{margin:0;padding:40px 24px 80px;background:var(--bg);color:var(--text);font-family:-apple-system,"SF Pro Text",system-ui,sans-serif;font-size:14px;line-height:1.5}
+main{max-width:1000px;margin:0 auto;display:flex;flex-direction:column;gap:40px}
+h1{margin:0;font-size:28px;letter-spacing:-0.4px}
+h2{margin:0;font-size:17px}
+p{margin:0;color:var(--text2);max-width:640px}
+a{color:var(--accent)}
+section{display:flex;flex-direction:column;gap:10px}
+.frame{overflow-x:auto}
+iframe{display:block;width:1000px;height:700px;border:1px solid var(--line);border-radius:12px;background:transparent}
+iframe.small{height:560px}
+</style>
+</head>
+<body>
+<main>
+  <header style="display:flex;flex-direction:column;gap:8px">
+    <h1>Copier Swift Redesign</h1>
+    <p>Screens for the native macOS rewrite. Each screen follows the system appearance. Open a screen on its own and add <code>?dark</code> or <code>?light</code> to force one. Background and decisions: <a href="README.md">README.md</a>.</p>
+  </header>
+
+  <section>
+    <h2>1 · Waiting for card</h2>
+    <p>Idle state. The scan starts on its own when a card is inserted.</p>
+    <div class="frame"><iframe src="screens/Main.html" title="Waiting for card" loading="lazy"></iframe></div>
+  </section>
+
+  <section>
+    <h2>2 · Review, folder per day</h2>
+    <p>One row per day with its folder field. The open day lists every file on the card, including the ones Copier leaves out by default.</p>
+    <div class="frame"><iframe src="screens/Review.html" title="Review, folder per day" loading="lazy"></iframe></div>
+  </section>
+
+  <section>
+    <h2>2b · Choosing an existing folder</h2>
+    <p>The arrow in the folder field lists the folders that already exist at the destination.</p>
+    <div class="frame"><iframe src="screens/ReviewPicker.html" title="Choosing an existing folder" loading="lazy"></iframe></div>
+  </section>
+
+  <section>
+    <h2>2c · Review, one folder</h2>
+    <p>Everything goes into a single new or existing folder.</p>
+    <div class="frame"><iframe src="screens/ReviewOneFolder.html" title="Review, one folder" loading="lazy"></iframe></div>
+  </section>
+
+  <section>
+    <h2>3 · Backing up</h2>
+    <div class="frame"><iframe src="screens/Copying.html" title="Backing up" loading="lazy"></iframe></div>
+  </section>
+
+  <section>
+    <h2>4 · Done</h2>
+    <div class="frame"><iframe src="screens/Done.html" title="Done" loading="lazy"></iframe></div>
+  </section>
+
+  <section>
+    <h2>Folder Sync</h2>
+    <div class="frame"><iframe src="screens/FolderSync.html" title="Folder Sync" loading="lazy"></iframe></div>
+  </section>
+
+  <section>
+    <h2>Settings window</h2>
+    <div class="frame"><iframe class="small" src="screens/Settings.html" title="Settings window" loading="lazy"></iframe></div>
+  </section>
+</main>
+</body>
+</html>

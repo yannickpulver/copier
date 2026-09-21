@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Folder Sync</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#C9CDD4;font-family:-apple-system,"SF Pro Text",system-ui,sans-serif}
+.light{--bg:#F5F6F8;--sidebar:#EBEDF0;--surface:#FFFFFF;--line:#DADDE3;--text:#16181D;--text2:#565B66;--accent:#1D5FD1;--on-accent:#FFFFFF;--accent-soft:#E4EDFB;--ok:#1F7A3D;--ok-soft:#E3F3E8;--warn:#8A5A00;--warn-soft:#FBF0D5;--sel:#DCE0E7}
+.dark{--bg:#1B1C1F;--sidebar:#232529;--surface:#292B30;--line:#393C43;--text:#F0F1F4;--text2:#A3A8B3;--accent:#6BA4FF;--on-accent:#0E1320;--accent-soft:#1B2A44;--ok:#5CC483;--ok-soft:#1D3326;--warn:#E5B454;--warn-soft:#3A2F17;--sel:#363940}
+a{color:var(--accent)}a:hover{color:var(--accent)}
+button{font:inherit}
+@media (prefers-color-scheme: dark){body{background:#0F1012}}
+</style>
+</head>
+<body>
+<div class="light" id="window" style="width: 920px; height: 620px; box-sizing: border-box; display: flex; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; font-size: 13px;">
+
+  <div style="flex: 0 0 200px; width: 200px; box-sizing: border-box; height: 100%; background: var(--sidebar); border-right: 1px solid var(--line); display: flex; flex-direction: column; padding: 12px 10px 10px; gap: 16px;">
+    <div style="display: flex; align-items: center; gap: 8px; padding: 2px 4px;">
+      <span style="width: 12px; height: 12px; border-radius: 50%; background: #FF5F57;"></span>
+      <span style="width: 12px; height: 12px; border-radius: 50%; background: #FEBC2E;"></span>
+      <span style="width: 12px; height: 12px; border-radius: 50%; background: #28C840;"></span>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 2px;">
+      <button type="button" style="display: flex; align-items: center; gap: 9px; height: 28px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text); font-size: 13px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 21H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h7.2L19 8.4V20a1 1 0 0 1-1 1Z"/><path d="M10 5.5v3M13 5.5v3M16 8v1.5"/></svg>
+        <span>SD Backup</span>
+      </button>
+      <button type="button" style="display: flex; align-items: center; gap: 9px; height: 28px; padding: 0 8px; border: 0; border-radius: 6px; background: var(--sel); color: var(--text); font-size: 13px; font-weight: 500;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12a8 8 0 0 1 13.3-5.9L20 8"/><path d="M20 4.5V8h-3.5"/><path d="M20 12a8 8 0 0 1-13.3 5.9L4 16"/><path d="M4 19.5V16h3.5"/></svg>
+        <span>Folder Sync</span>
+      </button>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 6px;">
+      <span style="font-size: 11px; font-weight: 600; color: var(--text2); letter-spacing: 0.3px; padding: 0 8px;">CARDS</span>
+      <div style="display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 6px; border: 1px dashed var(--line); color: var(--text2);">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 21H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h7.2L19 8.4V20a1 1 0 0 1-1 1Z"/><path d="M10 5.5v3M13 5.5v3M16 8v1.5"/></svg>
+        <span style="font-size: 12px;">No card</span>
+      </div>
+    </div>
+
+    <div style="flex: 1;"></div>
+
+    <button type="button" style="display: flex; align-items: center; gap: 9px; height: 28px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text2); font-size: 12px;">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.1"/><path d="M12 3v2.4M12 18.6V21M4.6 4.6l1.7 1.7M17.7 17.7l1.7 1.7M3 12h2.4M18.6 12H21M4.6 19.4l1.7-1.7M17.7 6.3l1.7-1.7"/></svg>
+      <span style="flex: 1; text-align: left;">Settings</span>
+      <span style="font-size: 12px;">⌘,</span>
+    </button>
+  </div>
+
+  <div style="flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column;">
+    <div style="flex: 0 0 52px; height: 52px; box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; padding: 0 22px; border-bottom: 1px solid var(--line);">
+      <h1 style="margin: 0; font-size: 21px; font-weight: 600; letter-spacing: -0.2px;">Folder Sync</h1>
+      <span style="font-size: 12px; color: var(--text2);">Compared by name and size</span>
+    </div>
+
+    <div style="flex: 1; min-height: 0; box-sizing: border-box; padding: 22px 28px 20px; display: flex; flex-direction: column; gap: 18px;">
+
+      <div style="display: flex; align-items: center; gap: 14px;">
+
+        <div style="flex: 1; min-width: 0; box-sizing: border-box; background: var(--surface); border: 1px dashed var(--line); border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px;">
+          <span style="font-size: 11px; font-weight: 600; color: var(--text2); letter-spacing: 0.3px;">SOURCE</span>
+          <span style="font-family: 'SF Mono', ui-monospace, Menlo, monospace; font-size: 12px; line-height: 1.5; word-break: break-all;">/Volumes/SSD T7/2026.09.18 - Hochzeit Anna &amp; Tim</span>
+          <span style="font-size: 12px; color: var(--text2); font-variant-numeric: tabular-nums;">1,204 files</span>
+          <div style="display: flex;">
+            <button type="button" style="height: 28px; padding: 0 13px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font-size: 12px; font-weight: 600;">Choose…</button>
+          </div>
+        </div>
+
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: 0 0 22px; color: var(--text2);"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg>
+
+        <div style="flex: 1; min-width: 0; box-sizing: border-box; background: var(--surface); border: 1px dashed var(--line); border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px;">
+          <span style="font-size: 11px; font-weight: 600; color: var(--text2); letter-spacing: 0.3px;">TARGET</span>
+          <span style="font-family: 'SF Mono', ui-monospace, Menlo, monospace; font-size: 12px; line-height: 1.5; word-break: break-all;">NAS · /photo/2026/2026.09.18 - Hochzeit Anna &amp; Tim</span>
+          <span style="font-size: 12px; color: var(--text2); font-variant-numeric: tabular-nums;">1,180 files</span>
+          <div style="display: flex;">
+            <button type="button" style="height: 28px; padding: 0 13px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font-size: 12px; font-weight: 600;">Choose…</button>
+          </div>
+        </div>
+
+      </div>
+
+      <div style="box-sizing: border-box; display: flex; align-items: center; gap: 9px; padding: 11px 13px; border-radius: 8px; background: var(--warn-soft); color: var(--warn);">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: 0 0 16px;"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.2M12 16.3v.2"/></svg>
+        <span style="font-size: 13px; font-weight: 500;">24 files are missing in the target · 3.1 GB</span>
+      </div>
+
+      <div style="box-sizing: border-box; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; display: flex; flex-direction: column;">
+        <div style="display: flex; align-items: center; gap: 12px; padding: 9px 14px; border-bottom: 1px solid var(--line);">
+          <span style="flex: 1; min-width: 0; font-family: 'SF Mono', ui-monospace, Menlo, monospace; font-size: 12px;">DSC04712.ARW</span>
+          <span style="font-size: 12px; color: var(--text2); font-variant-numeric: tabular-nums;">48.2 MB</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 12px; padding: 9px 14px; border-bottom: 1px solid var(--line);">
+          <span style="flex: 1; min-width: 0; font-family: 'SF Mono', ui-monospace, Menlo, monospace; font-size: 12px;">DSC04713.ARW</span>
+          <span style="font-size: 12px; color: var(--text2); font-variant-numeric: tabular-nums;">47.9 MB</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 12px; padding: 9px 14px; border-bottom: 1px solid var(--line);">
+          <span style="flex: 1; min-width: 0; font-family: 'SF Mono', ui-monospace, Menlo, monospace; font-size: 12px;">DSC04714.ARW</span>
+          <span style="font-size: 12px; color: var(--text2); font-variant-numeric: tabular-nums;">48.6 MB</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 12px; padding: 9px 14px; border-bottom: 1px solid var(--line);">
+          <span style="flex: 1; min-width: 0; font-family: 'SF Mono', ui-monospace, Menlo, monospace; font-size: 12px;">C0031.MP4</span>
+          <span style="font-size: 12px; color: var(--text2); font-variant-numeric: tabular-nums;">1.42 GB</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 12px; padding: 9px 14px; border-bottom: 1px solid var(--line);">
+          <span style="flex: 1; min-width: 0; font-family: 'SF Mono', ui-monospace, Menlo, monospace; font-size: 12px;">C0032.MP4</span>
+          <span style="font-size: 12px; color: var(--text2); font-variant-numeric: tabular-nums;">1.08 GB</span>
+        </div>
+        <div style="display: flex; align-items: center; padding: 9px 14px;">
+          <span style="font-size: 12px; color: var(--text2);">and 19 more</span>
+        </div>
+      </div>
+
+      <div style="flex: 1;"></div>
+
+      <div style="display: flex; align-items: center; justify-content: flex-end;">
+        <button type="button" style="height: 34px; padding: 0 18px; border: 0; border-radius: 8px; background: var(--accent); color: var(--on-accent); font-size: 13px; font-weight: 600;">Copy 24 missing files</button>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+<script>
+// follow the system appearance; add ?dark or ?light to force one
+var q=location.search,w=document.getElementById("window");
+if(q==="?dark"||(q!=="?light"&&matchMedia("(prefers-color-scheme: dark)").matches))w.className="dark";
+</script>
+</body>
+</html>

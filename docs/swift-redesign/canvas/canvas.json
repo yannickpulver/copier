@@ -1,0 +1,113 @@
+{
+  "v": 3,
+  "attachments": {},
+  "boards": {
+    "Copying.dc.html": {
+      "h": 620,
+      "is_interactive": true,
+      "title": "3 · Backing up",
+      "w": 920,
+      "x": 2000,
+      "y": 0
+    },
+    "Done.dc.html": {
+      "h": 620,
+      "title": "4 · Done",
+      "w": 920,
+      "x": 3000,
+      "y": 0
+    },
+    "FolderSync.dc.html": {
+      "h": 620,
+      "title": "Folder Sync",
+      "w": 920,
+      "x": 0,
+      "y": 2080
+    },
+    "Main.dc.html": {
+      "h": 620,
+      "is_interactive": true,
+      "title": "1 · Waiting for card",
+      "w": 920,
+      "x": 0,
+      "y": 0
+    },
+    "Review.dc.html": {
+      "h": 620,
+      "is_interactive": true,
+      "title": "2 · Review · folder per day",
+      "w": 920,
+      "x": 1000,
+      "y": 0
+    },
+    "ReviewOneFolder.dc.html": {
+      "h": 620,
+      "is_interactive": true,
+      "title": "2c · Review · one folder",
+      "w": 920,
+      "x": 1000,
+      "y": 1040
+    },
+    "ReviewPicker.dc.html": {
+      "h": 620,
+      "is_interactive": true,
+      "title": "2b · Choosing an existing folder",
+      "w": 920,
+      "x": 0,
+      "y": 1040
+    },
+    "Settings.dc.html": {
+      "h": 480,
+      "title": "Settings window",
+      "w": 680,
+      "x": 1000,
+      "y": 2080
+    }
+  },
+  "createdOnFiles": {
+    "at": "2026-09-20T12:00:00Z",
+    "v": 1
+  },
+  "designSystems": [],
+  "launch": {
+    "view": "canvas"
+  },
+  "notes": {
+    "flow": {
+      "kind": "title1",
+      "maxW": 3920,
+      "text": "SD Backup flow",
+      "w": 240,
+      "x": 0,
+      "y": -300
+    },
+    "other": {
+      "kind": "title1",
+      "maxW": 1680,
+      "text": "Folder Sync and Settings",
+      "w": 240,
+      "x": 0,
+      "y": 1780
+    },
+    "variants": {
+      "kind": "title1",
+      "maxW": 1920,
+      "text": "Review: folder options",
+      "w": 240,
+      "x": 0,
+      "y": 740
+    }
+  },
+  "order": [
+    "Main.dc.html",
+    "Review.dc.html",
+    "Copying.dc.html",
+    "Done.dc.html",
+    "ReviewPicker.dc.html",
+    "ReviewOneFolder.dc.html",
+    "FolderSync.dc.html",
+    "Settings.dc.html"
+  ],
+  "pages": [],
+  "title": "Copier Swift Redesign"
+}

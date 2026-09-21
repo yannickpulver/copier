@@ -102,3 +102,10 @@ out/
 
 # Dev test SD fixture (generate via npm run make-test-sd)
 dev-fixtures/
+
+# Swift app (macos/) — Tuist generates these
+macos/*.xcodeproj
+macos/*.xcworkspace
+macos/Derived/
+macos/.build/
+macos/CopierCore/.build/
