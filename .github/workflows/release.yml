@@ -61,7 +61,11 @@ jobs:
       - name: Install Tuist
         # Tuist is not in homebrew-core; its own tap ships versioned formulae.
         # Pinned to the version the project is developed with.
-        run: brew install tuist/tuist/tuist@4.208.0
+        run: |
+          brew tap tuist/tuist
+          # Newer Homebrew refuses formulae from third-party taps until trusted.
+          brew trust tuist/tuist
+          brew install tuist/tuist/tuist@4.208.0
 
       - name: Run CopierCore tests
         working-directory: macos/CopierCore
