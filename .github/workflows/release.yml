@@ -59,7 +59,9 @@ jobs:
           xcodebuild -version
 
       - name: Install Tuist
-        run: brew install --formula tuist
+        # Tuist is not in homebrew-core; its own tap ships versioned formulae.
+        # Pinned to the version the project is developed with.
+        run: brew install tuist/tuist/tuist@4.208.0
 
       - name: Run CopierCore tests
         working-directory: macos/CopierCore
