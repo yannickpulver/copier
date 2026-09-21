@@ -97,24 +97,40 @@ extension ScreenHeader where Trailing == Text {
     }
 }
 
-/// An inline warning or error banner, used for unreachable sources and missing space.
+/// An inline success, warning or error banner, used for finished copies, unreachable
+/// sources and missing space.
 struct InlineBanner: View {
-    enum Kind { case warning, error }
+    enum Kind { case success, warning, error }
 
     let kind: Kind
     let message: String
     var actionTitle: String?
     var action: (() -> Void)?
 
-    private var tint: Color { kind == .warning ? Theme.warning : Color(nsColor: .systemRed) }
+    private var tint: Color {
+        switch kind {
+        case .success: Theme.success
+        case .warning: Theme.warning
+        case .error: Color(nsColor: .systemRed)
+        }
+    }
+
+    private var symbol: String {
+        switch kind {
+        case .success: "checkmark.circle"
+        case .warning: "exclamationmark.triangle"
+        case .error: "exclamationmark.octagon"
+        }
+    }
 
     var body: some View {
         HStack(spacing: 9) {
-            Image(systemName: kind == .warning ? "exclamationmark.triangle" : "exclamationmark.octagon")
+            Image(systemName: symbol)
                 .foregroundStyle(tint)
+            // No fixedSize here: a vertically fixed Text reports a huge minimum height
+            // when measured at zero width, which made the whole window layout overflow.
             Text(message)
                 .font(Theme.body)
-                .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
             if let actionTitle, let action {
                 Button(actionTitle, action: action)

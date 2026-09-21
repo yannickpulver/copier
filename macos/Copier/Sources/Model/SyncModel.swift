@@ -59,6 +59,12 @@ final class SyncModel {
     private(set) var results: [SourceResult] = []
     private(set) var errorMessage: String?
 
+    private(set) var bytesPerSecond: Double = 0
+    private(set) var secondsRemaining: TimeInterval?
+    private(set) var bytesCopied: Int64 = 0
+    private(set) var bytesTotal: Int64 = 0
+    private var speed = SpeedEstimator()
+
     private let settings: SettingsStore
     private var work: Task<Void, Never>?
 
@@ -67,6 +73,12 @@ final class SyncModel {
         sources = settings.syncSources.map { URL(fileURLWithPath: $0) }
         target = settings.syncTarget.map { URL(fileURLWithPath: $0) }
         appendSourceName = settings.syncAppendSourceName
+    }
+
+    /// The "Back up to" destinations from Settings, offered as quick picks for the target.
+    /// Read live so a destination added in Settings shows up without restarting.
+    var suggestedTargets: [URL] {
+        settings.transferDestinations.map { URL(fileURLWithPath: $0) }
     }
 
     // MARK: Sources
@@ -156,6 +168,30 @@ final class SyncModel {
         !sources.isEmpty && target != nil && !isBusy
     }
 
+    /// The target may not exist yet — it is created on copy. What must exist is a
+    /// writable folder somewhere above it. Otherwise an unmounted NAS share compares as
+    /// "0 files" and the copy fails on every file with a permission error from `/Volumes`.
+    private func targetProblem(_ target: URL) -> String? {
+        let fileManager = FileManager.default
+        var existing = target.standardizedFileURL
+        while !fileManager.fileExists(atPath: existing.path) {
+            let parent = existing.deletingLastPathComponent()
+            if parent.path == existing.path { break }
+            existing = parent
+        }
+        if target.path.hasPrefix("/Volumes/"), existing.path == "/Volumes" || existing.path == "/" {
+            return "The volume for \"\(target.path)\" is not mounted."
+        }
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: existing.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            return "\"\(existing.path)\" is a file, so \"\(target.lastPathComponent)\" cannot be created inside it."
+        }
+        if !fileManager.isWritableFile(atPath: existing.path) {
+            return "No write access to \"\(existing.path)\", so the target folder cannot be created."
+        }
+        return nil
+    }
+
     var isBusy: Bool {
         switch phase {
         case .comparing, .copying: return true
@@ -175,6 +211,11 @@ final class SyncModel {
         work?.cancel()
         errorMessage = nil
         results = []
+
+        if let problem = targetProblem(target) {
+            errorMessage = problem
+            return
+        }
 
         if sourcesSnapshot.count > 1 {
             var seenNames = Set<String>()
@@ -265,12 +306,27 @@ final class SyncModel {
         let totalFiles = allResults.reduce(0) { $0 + $1.diff.missing.count + $1.diff.different.count }
         let totalUpdates = allResults.reduce(0) { $0 + $1.tagUpdates.count }
         guard totalFiles > 0 || totalUpdates > 0 else { return }
+        // The share may have gone away between compare and copy.
+        if let target, let problem = targetProblem(target) {
+            errorMessage = problem
+            return
+        }
         work?.cancel()
+        errorMessage = nil
         phase = .copying(done: 0, total: totalFiles, file: "")
+        bytesTotal = bytesToCopy
+        speed = SpeedEstimator()
+        bytesCopied = 0
+        bytesPerSecond = 0
+        secondsRemaining = nil
 
-        let throttle = Throttle<(Int, Int, String)>(interval: 0.1) { [weak self] value in
+        let throttle = Throttle<CopyTick>(interval: 0.1) { [weak self] tick in
             guard let self, case .copying = self.phase else { return }
-            self.phase = .copying(done: value.0, total: value.1, file: value.2)
+            self.phase = .copying(done: tick.filesDone, total: tick.filesTotal, file: tick.file)
+            self.bytesCopied = tick.bytesDone
+            self.speed.update(bytesDone: tick.bytesDone, at: ProcessInfo.processInfo.systemUptime)
+            self.bytesPerSecond = self.speed.bytesPerSecond
+            self.secondsRemaining = self.speed.timeRemaining(bytesDone: tick.bytesDone, bytesTotal: self.bytesTotal)
         }
         let prefixFailures = allResults.count > 1
 
@@ -279,14 +335,41 @@ final class SyncModel {
             var allFailures: [CopyFailure] = []
             var tagged = 0
             var offset = 0
+            var bytesOffset: Int64 = 0
             var cancelledOverall = false
 
             for result in allResults {
                 let files = result.diff.missing + result.diff.different
                 let baseOffset = offset
-                let outcome = await FolderSync.copy(files: files, destinationRoot: result.destination) { done, total, name in
-                    throttle.send((baseOffset + done, totalFiles, name), force: done == total)
-                }
+                let baseBytesOffset = bytesOffset
+                let tracker = CopyTickTracker(filesDone: baseOffset)
+                let outcome = await FolderSync.copy(
+                    files: files,
+                    destinationRoot: result.destination,
+                    progress: { done, total, name in
+                        let snapshot = tracker.fileProgressed(filesDone: baseOffset + done, name: name)
+                        throttle.send(
+                            CopyTick(
+                                filesDone: snapshot.filesDone,
+                                filesTotal: totalFiles,
+                                file: snapshot.file,
+                                bytesDone: baseBytesOffset + snapshot.bytesDone
+                            ),
+                            force: done == total
+                        )
+                    },
+                    onBytes: { chunk in
+                        let snapshot = tracker.bytesProgressed(chunk)
+                        throttle.send(
+                            CopyTick(
+                                filesDone: snapshot.filesDone,
+                                filesTotal: totalFiles,
+                                file: snapshot.file,
+                                bytesDone: baseBytesOffset + snapshot.bytesDone
+                            )
+                        )
+                    }
+                )
                 totalCopied += outcome.copied
                 if prefixFailures {
                     let prefix = result.source.lastPathComponent
@@ -295,6 +378,7 @@ final class SyncModel {
                     allFailures += outcome.failures
                 }
                 offset += files.count
+                bytesOffset += files.reduce(0) { $0 + $1.size }
                 if outcome.cancelled {
                     cancelledOverall = true
                     break
@@ -321,6 +405,8 @@ final class SyncModel {
                     failures: allFailures,
                     cancelled: cancelledOverall
                 )
+                self.bytesPerSecond = 0
+                self.secondsRemaining = nil
                 // A cancelled run left work behind: keep the results so it can be resumed.
                 if !cancelledOverall {
                     self.results = []
@@ -335,5 +421,47 @@ final class SyncModel {
         // A finished-with-cancel phase is set by the copy task itself; only a cancelled
         // comparison drops straight back to idle.
         if case .comparing = phase { phase = results.isEmpty ? .idle : .compared }
+    }
+}
+
+/// One throttled progress sample for a copy run: file counts (already offset across
+/// sources) plus the bytes copied so far (also offset across sources).
+private struct CopyTick: Sendable {
+    var filesDone: Int
+    var filesTotal: Int
+    var file: String
+    var bytesDone: Int64
+}
+
+/// Tracks the running totals for a single source's copy, shared between the per-file
+/// `progress` closure and the per-chunk `onBytes` closure — both fire off the main
+/// actor, on `TransferService`'s own task, so the shared state needs a lock.
+private final class CopyTickTracker: @unchecked Sendable {
+    private let lock = NSLock()
+    private var filesDone: Int
+    private var currentFile = ""
+    private var bytesDone: Int64 = 0
+
+    /// `filesDone` starts at the count already finished by earlier sources, so the
+    /// first chunks of a later source do not make the counter jump back to zero.
+    init(filesDone: Int) {
+        self.filesDone = filesDone
+    }
+
+    /// A file finished (or failed): advance the file count and name.
+    func fileProgressed(filesDone: Int, name: String) -> (filesDone: Int, file: String, bytesDone: Int64) {
+        lock.lock()
+        defer { lock.unlock() }
+        self.filesDone = filesDone
+        self.currentFile = name
+        return (self.filesDone, self.currentFile, self.bytesDone)
+    }
+
+    /// A chunk was written: advance the byte count.
+    func bytesProgressed(_ chunk: Int64) -> (filesDone: Int, file: String, bytesDone: Int64) {
+        lock.lock()
+        defer { lock.unlock() }
+        bytesDone += chunk
+        return (self.filesDone, self.currentFile, self.bytesDone)
     }
 }

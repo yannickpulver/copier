@@ -32,7 +32,7 @@ struct RootView: View {
             await backup.checkLocations()
         }
         .task { await Self.watchVolumes(backup) }
-        .modifier(DebugSnapshotModifier(model: backup, screen: $screen))
+        .modifier(DebugSnapshotModifier(model: backup, sync: sync, screen: $screen))
     }
 
     /// Mount / unmount / rename notifications drive the card list.
@@ -59,11 +59,12 @@ struct RootView: View {
 /// Debug builds write window snapshots; release builds do nothing at all.
 private struct DebugSnapshotModifier: ViewModifier {
     let model: BackupModel
+    let sync: SyncModel
     @Binding var screen: Screen
 
     func body(content: Content) -> some View {
         #if DEBUG
-            content.debugSnapshots(model: model, screen: $screen)
+            content.debugSnapshots(model: model, sync: sync, screen: $screen)
         #else
             content
         #endif

@@ -137,6 +137,38 @@ struct FolderSyncCopyTests {
         #expect(untouched == "existing content")
     }
 
+    @Test("onBytes reports the full byte total across all copied files")
+    func onBytesReportsTotalBytes() async throws {
+        let root = try TempDirectory()
+        let sourceDirectory = root.url.appendingPathComponent("src")
+        let destinationRoot = root.url.appendingPathComponent("dest")
+        try FileManager.default.createDirectory(at: sourceDirectory, withIntermediateDirectories: true)
+
+        let firstContent = "hello world"
+        let secondContent = "a bit more content than the first file"
+        let firstFile = sourceDirectory.appendingPathComponent("a.txt")
+        let secondFile = sourceDirectory.appendingPathComponent("b.txt")
+        try firstContent.write(to: firstFile, atomically: true, encoding: .utf8)
+        try secondContent.write(to: secondFile, atomically: true, encoding: .utf8)
+
+        let files = [
+            SyncFile(relativePath: "a.txt", url: firstFile, name: "a.txt", size: Int64(firstContent.utf8.count)),
+            SyncFile(relativePath: "b.txt", url: secondFile, name: "b.txt", size: Int64(secondContent.utf8.count)),
+        ]
+        let expectedTotal = files.reduce(0) { $0 + $1.size }
+
+        let counter = ByteCounter()
+        let outcome = await FolderSync.copy(
+            files: files,
+            destinationRoot: destinationRoot,
+            onBytes: { counter.add($0) }
+        )
+
+        #expect(outcome.copied == 2)
+        #expect(outcome.failures.isEmpty)
+        #expect(counter.total == expectedTotal)
+    }
+
     @Test("walk skips dot files and stale partials")
     func walkSkips() async throws {
         let root = try TempDirectory()
@@ -147,6 +179,24 @@ struct FolderSyncCopyTests {
 
         let files = try await FolderSync.walk(root.url)
         #expect(files.map(\.relativePath) == ["sub/a.jpg"])
+    }
+}
+
+/// Sums the bytes reported by `onBytes` across calls from any thread.
+final class ByteCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Int64 = 0
+
+    func add(_ bytes: Int64) {
+        lock.lock()
+        value += bytes
+        lock.unlock()
+    }
+
+    var total: Int64 {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
     }
 }
 

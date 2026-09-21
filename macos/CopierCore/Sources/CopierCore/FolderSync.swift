@@ -156,7 +156,8 @@ public enum FolderSync {
     public static func copy(
         files: [SyncFile],
         destinationRoot: URL,
-        progress: (@Sendable (Int, Int, String) -> Void)? = nil
+        progress: (@Sendable (Int, Int, String) -> Void)? = nil,
+        onBytes: (@Sendable (Int64) -> Void)? = nil
     ) async -> SyncCopyResult {
         var failures: [CopyFailure] = []
         var copied = 0
@@ -173,7 +174,7 @@ public enum FolderSync {
                     at: destination.deletingLastPathComponent(),
                     withIntermediateDirectories: true
                 )
-                try await TransferService.copyOne(from: file.url, to: destination)
+                try await TransferService.copyOne(from: file.url, to: destination, onBytes: onBytes)
                 copied += 1
             } catch let error as BackupError {
                 if case .cancelled = error {

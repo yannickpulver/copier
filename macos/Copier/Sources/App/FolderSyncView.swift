@@ -9,6 +9,8 @@ struct FolderSyncView: View {
         VStack(spacing: 0) {
             ScreenHeader("Folder Sync", detail: "Compared by name and size")
 
+            // The file list scrolls inside its box and takes the remaining height, so the
+            // action row below stays pinned and the copy button is always reachable.
             VStack(alignment: .leading, spacing: 18) {
                 HStack(alignment: .top, spacing: 14) {
                     SourcesCard(
@@ -16,6 +18,7 @@ struct FolderSyncView: View {
                         results: model.results,
                         isBusy: model.isBusy,
                         remove: { model.removeSource($0) },
+                        drop: { model.addSources($0) },
                         add: {
                             let urls = FolderPanel.chooseFolders(
                                 title: "Choose source folders",
@@ -26,11 +29,14 @@ struct FolderSyncView: View {
                     )
                     Image(systemName: "arrow.right")
                         .foregroundStyle(.secondary)
+                        .padding(.top, 16)
                     FolderCard(
                         label: "Target",
                         url: targetURL,
                         countText: targetCountText,
                         isBusy: model.isBusy,
+                        suggestions: model.suggestedTargets,
+                        select: { model.target = $0 },
                         choose: {
                             if let url = FolderPanel.chooseFolder(title: "Choose the target folder", start: model.target) {
                                 model.target = url
@@ -38,6 +44,9 @@ struct FolderSyncView: View {
                         }
                     )
                 }
+                // Both cards take the height of the taller one. Safe here because every
+                // text in the cards is line-limited, so the row's minimum height is bounded.
+                .fixedSize(horizontal: false, vertical: true)
 
                 HStack(spacing: 18) {
                     if model.sources.count <= 1 {
@@ -54,22 +63,29 @@ struct FolderSyncView: View {
                 content
 
                 Spacer(minLength: 0)
-
-                HStack {
-                    if let message = model.errorMessage {
-                        Text(message)
-                            .font(Theme.secondary)
-                            .foregroundStyle(Theme.warning)
-                    }
-                    Spacer()
-                    primaryButton
-                }
             }
             .padding(.horizontal, 28)
             .padding(.top, 22)
             .padding(.bottom, 20)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+            Divider()
+            HStack {
+                if let message = model.errorMessage {
+                    Text(message)
+                        .font(Theme.secondary)
+                        .foregroundStyle(Theme.warning)
+                        .lineLimit(2)
+                }
+                Spacer()
+                // A long error message must not squeeze the button out of the row.
+                primaryButton
+                    .fixedSize()
+            }
+            .padding(.horizontal, 28)
+            .padding(.vertical, 14)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     // MARK: Body states
@@ -92,35 +108,66 @@ struct FolderSyncView: View {
             comparedContent
         case let .copying(done, total, file):
             VStack(alignment: .leading, spacing: 8) {
-                ProgressView(value: Double(done), total: Double(max(total, 1)))
-                Text("\(Format.count(done)) of \(Format.count(total)) · \(file)")
-                    .font(Theme.mono)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                if model.bytesTotal > 0 {
+                    ProgressView(value: Double(model.bytesCopied), total: Double(model.bytesTotal))
+                } else {
+                    ProgressView(value: Double(done), total: Double(max(total, 1)))
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("\(Format.count(done)) of \(Format.count(total)) files · \(Format.bytes(model.bytesCopied)) of \(Format.bytes(model.bytesTotal))")
+                        .font(Theme.secondary)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                    Text(speedLine)
+                        .font(Theme.secondary)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                    Text(file)
+                        .font(Theme.mono)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
             }
         case let .finished(copied, tagged, failures, cancelled):
             VStack(alignment: .leading, spacing: 8) {
                 InlineBanner(
-                    kind: failures.isEmpty && !cancelled ? .warning : .error,
+                    kind: failures.isEmpty && !cancelled ? .success : .error,
                     message: finishedMessage(copied: copied, tagged: tagged, failures: failures, cancelled: cancelled)
                 )
                 if !failures.isEmpty {
                     GroupedBox {
-                        ForEach(Array(failures.prefix(10).enumerated()), id: \.offset) { index, failure in
-                            if index > 0 { Divider() }
-                            HStack {
-                                Text(failure.file).font(Theme.mono).lineLimit(1)
-                                Spacer(minLength: 8)
-                                Text(failure.reason).font(Theme.secondary).foregroundStyle(.secondary).lineLimit(1)
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 0) {
+                                ForEach(Array(failures.enumerated()), id: \.offset) { index, failure in
+                                    if index > 0 { Divider() }
+                                    HStack {
+                                        Text(failure.file).font(Theme.mono).lineLimit(1)
+                                        Spacer(minLength: 8)
+                                        Text(failure.reason)
+                                            .font(Theme.secondary)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                            .truncationMode(.tail)
+                                            .help(failure.reason)
+                                    }
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 9)
+                                }
                             }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 9)
                         }
+                        .frame(maxHeight: .infinity)
                     }
                 }
             }
+            .frame(maxHeight: .infinity)
         }
+    }
+
+    private var speedLine: String {
+        var parts = [Format.speed(model.bytesPerSecond)]
+        if let left = Format.timeLeft(model.secondsRemaining) { parts.append(left) }
+        return parts.joined(separator: " · ")
     }
 
     private func finishedMessage(copied: Int, tagged: Int, failures: [CopyFailure], cancelled: Bool) -> String {
@@ -157,7 +204,7 @@ struct FolderSyncView: View {
     private var comparedContent: some View {
         let files = model.displayFiles
         if files.isEmpty, model.tagUpdates.isEmpty {
-            InlineBanner(kind: .warning, message: "Everything in the source is already in the target.")
+            InlineBanner(kind: .success, message: "Everything in the source is already in the target.")
         } else {
             VStack(alignment: .leading, spacing: 12) {
                 InlineBanner(
@@ -166,32 +213,30 @@ struct FolderSyncView: View {
                         + (model.tagUpdates.isEmpty ? "" : " · \(model.tagUpdates.count) tag updates")
                 )
                 GroupedBox {
-                    ForEach(Array(files.prefix(5).enumerated()), id: \.offset) { index, file in
-                        if index > 0 { Divider() }
-                        HStack(spacing: 12) {
-                            Text(file.path)
-                                .font(Theme.mono)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            Text(Format.bytes(file.size))
-                                .font(Theme.secondary)
-                                .foregroundStyle(.secondary)
-                                .monospacedDigit()
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(files.enumerated()), id: \.element.id) { index, file in
+                                if index > 0 { Divider() }
+                                HStack(spacing: 12) {
+                                    Text(file.path)
+                                        .font(Theme.mono)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    Text(Format.bytes(file.size))
+                                        .font(Theme.secondary)
+                                        .foregroundStyle(.secondary)
+                                        .monospacedDigit()
+                                }
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 9)
+                            }
                         }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 9)
                     }
-                    if files.count > 5 {
-                        Divider()
-                        Text("and \(files.count - 5) more")
-                            .font(Theme.secondary)
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 9)
-                    }
+                    .frame(maxHeight: .infinity)
                 }
             }
+            .frame(maxHeight: .infinity)
         }
     }
 
@@ -232,19 +277,20 @@ struct FolderSyncView: View {
 
 /// Dashed-border card chrome shared by ``FolderCard`` and ``SourcesCard``.
 private struct DashedCard<Content: View>: View {
+    var highlighted = false
     @ViewBuilder var content: Content
 
     var body: some View {
         content
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(Theme.surface)
             .clipShape(.rect(cornerRadius: Theme.listRadius))
             .overlay(
                 RoundedRectangle(cornerRadius: Theme.listRadius)
-                    .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
-                    .foregroundStyle(Theme.hairline)
+                    .strokeBorder(style: StrokeStyle(lineWidth: highlighted ? 2 : 1, dash: [4, 3]))
+                    .foregroundStyle(highlighted ? AnyShapeStyle(.tint) : AnyShapeStyle(Theme.hairline))
             )
     }
 }
@@ -254,6 +300,9 @@ private struct FolderCard: View {
     let url: URL?
     let countText: String?
     var isBusy: Bool = false
+    /// Quick picks shown in a menu; empty means a plain "Choose…" button.
+    var suggestions: [URL] = []
+    var select: (URL) -> Void = { _ in }
     let choose: () -> Void
 
     var body: some View {
@@ -270,8 +319,28 @@ private struct FolderCard: View {
                     .font(Theme.secondary)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
-                Button("Choose…", action: choose)
+                if suggestions.isEmpty {
+                    Button("Choose…", action: choose)
+                        .disabled(isBusy)
+                } else {
+                    Menu("Choose…") {
+                        ForEach(suggestions, id: \.path) { suggestion in
+                            Button {
+                                select(suggestion)
+                            } label: {
+                                if suggestion.path == url?.path {
+                                    Label(suggestion.path, systemImage: "checkmark")
+                                } else {
+                                    Text(suggestion.path)
+                                }
+                            }
+                        }
+                        Divider()
+                        Button("Other…", action: choose)
+                    }
+                    .fixedSize()
                     .disabled(isBusy)
+                }
             }
         }
     }
@@ -284,10 +353,12 @@ private struct SourcesCard: View {
     let results: [SyncModel.SourceResult]
     let isBusy: Bool
     let remove: (URL) -> Void
+    let drop: ([URL]) -> Void
     let add: () -> Void
+    @State private var isDropTarget = false
 
     var body: some View {
-        DashedCard {
+        DashedCard(highlighted: isDropTarget) {
             VStack(alignment: .leading, spacing: 10) {
                 SectionLabel(text: "Sources")
                 if sources.isEmpty {
@@ -306,6 +377,13 @@ private struct SourcesCard: View {
                     .disabled(isBusy)
             }
         }
+        .dropDestination(for: URL.self) { urls, _ in
+            guard !isBusy else { return false }
+            let folders = urls.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+            guard !folders.isEmpty else { return false }
+            drop(folders)
+            return true
+        } isTargeted: { isDropTarget = $0 && !isBusy }
     }
 
     private static let scrollThreshold = 6

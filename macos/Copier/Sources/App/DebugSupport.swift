@@ -10,6 +10,7 @@
     /// - `COPIER_DEFAULTS_SUITE=<name>` — keep settings in their own defaults suite.
     /// - `COPIER_SNAPSHOT_DIR=<dir>` — write a PNG of the window on every phase change.
     /// - `COPIER_SNAPSHOT_OPEN=settings|sync` — also open that screen and snapshot it.
+    /// - `COPIER_SNAPSHOT_COMPARE=1` — with `sync`, also run Compare and snapshot the result.
     /// - `COPIER_FIXTURE_CARD=<dir>` — expose a folder as a card (read in `CopierApp`).
     enum DebugSupport {
         private static var environment: [String: String] { ProcessInfo.processInfo.environment }
@@ -41,6 +42,12 @@
             return value == "1" || value.lowercased() == "true"
         }
 
+        /// With `COPIER_SNAPSHOT_OPEN=sync`, also press Compare and snapshot `sync-compared.png`.
+        static var startsCompare: Bool {
+            let value = environment["COPIER_SNAPSHOT_COMPARE"] ?? ""
+            return value == "1" || value.lowercased() == "true"
+        }
+
         static var isSnapshotting: Bool { snapshotDirectory != nil }
 
         /// Write `<dir>/<name>.png` after `delay` seconds, so layout and animations settle.
@@ -60,9 +67,23 @@
                   let representation = content.bitmapImageRepForCachingDisplay(in: bounds)
             else { return }
             content.cacheDisplay(in: bounds, to: representation)
+            if environment["COPIER_SNAPSHOT_DUMP"] == "1" {
+                FileHandle.standardError.write(Data("--- \(name) window \(window.frame) content \(bounds)\n".utf8))
+                dump(content, depth: 0)
+            }
             guard let data = representation.representation(using: .png, properties: [:]) else { return }
             try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             try? data.write(to: directory.appendingPathComponent("\(name).png"))
+        }
+
+        @MainActor
+        private static func dump(_ view: NSView, depth: Int) {
+            guard depth < 14 else { return }
+            let pad = String(repeating: "  ", count: depth)
+            let f = view.frame
+            let line = "\(pad)\(type(of: view)) \(Int(f.origin.x)),\(Int(f.origin.y)) \(Int(f.width))x\(Int(f.height))\n"
+            FileHandle.standardError.write(Data(line.utf8))
+            for sub in view.subviews { dump(sub, depth: depth + 1) }
         }
 
         /// The settings snapshot wants the settings window, everything else the main one.
@@ -110,7 +131,7 @@
     extension View {
         /// Snapshots each phase change plus a `launch.png`, and optionally opens one
         /// extra screen — all of it inert unless `COPIER_SNAPSHOT_DIR` is set.
-        func debugSnapshots(model: BackupModel, screen: Binding<Screen>) -> some View {
+        func debugSnapshots(model: BackupModel, sync: SyncModel, screen: Binding<Screen>) -> some View {
             onChange(of: model.phaseName) { _, phase in
                 DebugSupport.snapshot(phase)
             }
@@ -132,6 +153,11 @@
                     try? await Task.sleep(for: .seconds(3))
                     screen.wrappedValue = .folderSync
                     DebugSupport.snapshot("sync")
+                    if DebugSupport.startsCompare, sync.canCompare {
+                        try? await Task.sleep(for: .seconds(2))
+                        sync.compare()
+                        DebugSupport.snapshot("sync-compared", delay: 4)
+                    }
                 default:
                     break
                 }
