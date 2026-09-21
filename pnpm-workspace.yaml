@@ -1,6 +1,0 @@
-# Electron Forge needs a flat node_modules to package the app
-nodeLinker: hoisted
-onlyBuiltDependencies:
-  - electron
-  - electron-winstaller
-  - esbuild

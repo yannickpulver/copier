@@ -46,10 +46,8 @@ xcodebuild -workspace macos/Copier.xcworkspace -scheme Copier build
 cd macos/CopierCore && swift test
 ```
 
+Debug builds show `dev-fixtures/test-sd` as a card. Generate it with `node scripts/make-test-sd.mjs`.
+
 ## Tech
 
 Swift + SwiftUI, project managed with Tuist.
-
-## Legacy Electron app
-
-`src/` contains the original Electron + TypeScript + Tailwind implementation. It's kept for reference but is no longer built or released; all active development is in `macos/`.

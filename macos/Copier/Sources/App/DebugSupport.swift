@@ -63,10 +63,15 @@
         private static func capture(_ name: String, into directory: URL) {
             guard let window = targetWindow(for: name), let content = window.contentView else { return }
             let bounds = content.bounds
-            guard bounds.width > 1, bounds.height > 1,
-                  let representation = content.bitmapImageRepForCachingDisplay(in: bounds)
-            else { return }
-            content.cacheDisplay(in: bounds, to: representation)
+            guard bounds.width > 1, bounds.height > 1 else { return }
+            let representation: NSBitmapImageRep
+            if let image = windowServerImage(of: window) {
+                representation = NSBitmapImageRep(cgImage: image)
+            } else {
+                guard let cached = content.bitmapImageRepForCachingDisplay(in: bounds) else { return }
+                content.cacheDisplay(in: bounds, to: cached)
+                representation = cached
+            }
             if environment["COPIER_SNAPSHOT_DUMP"] == "1" {
                 FileHandle.standardError.write(Data("--- \(name) window \(window.frame) content \(bounds)\n".utf8))
                 dump(content, depth: 0)
@@ -74,6 +79,19 @@
             guard let data = representation.representation(using: .png, properties: [:]) else { return }
             try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             try? data.write(to: directory.appendingPathComponent("\(name).png"))
+        }
+
+        /// The window as the window server composites it: title bar, materials and shadow,
+        /// none of which `cacheDisplay` draws. An app may capture its own windows without
+        /// the Screen Recording permission. `CGWindowListCreateImage` is gone from the SDK
+        /// but still exported, hence the `dlsym`; `nil` falls back to `cacheDisplay`.
+        @MainActor
+        private static func windowServerImage(of window: NSWindow) -> CGImage? {
+            typealias CreateImage = @convention(c) (CGRect, UInt32, UInt32, UInt32) -> Unmanaged<CGImage>?
+            guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGWindowListCreateImage") else { return nil }
+            let createImage = unsafeBitCast(symbol, to: CreateImage.self)
+            let includingWindow: UInt32 = 1 << 3
+            return createImage(.null, includingWindow, UInt32(window.windowNumber), 0)?.takeRetainedValue()
         }
 
         @MainActor
