@@ -212,8 +212,11 @@ final class SyncModel {
         errorMessage = nil
         results = []
 
+        // A rescan can start from `.compared`; without dropping back to idle the cleared
+        // results would read as "everything is already in the target".
         if let problem = targetProblem(target) {
             errorMessage = problem
+            phase = .idle
             return
         }
 
@@ -223,6 +226,7 @@ final class SyncModel {
                 let name = source.lastPathComponent.lowercased()
                 if seenNames.contains(name) {
                     errorMessage = "Two source folders are both called \"\(source.lastPathComponent)\". Rename one so they do not sync into the same target folder."
+                    phase = .idle
                     return
                 }
                 seenNames.insert(name)

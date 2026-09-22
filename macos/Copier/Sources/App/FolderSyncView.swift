@@ -6,6 +6,17 @@ struct FolderSyncView: View {
     @Bindable var model: SyncModel
 
     var body: some View {
+        // AppKit makes the screen's minimum size a hard constraint on the window's detail
+        // column, and SwiftUI measures that minimum at the view's minimum *width*, where
+        // every label wraps: ~690 pt, more than the ~640 pt a minimum-height window has.
+        // The column then grew past the window and pushed the action row off the bottom.
+        // A GeometryReader reports the height it is offered instead of one derived from
+        // the content, so the screen is laid out in the space that actually exists.
+        GeometryReader { _ in screen }
+    }
+
+    /// Header, the cards and the file list, and the action row pinned under a divider.
+    private var screen: some View {
         VStack(spacing: 0) {
             ScreenHeader("Folder Sync", detail: "Compared by name and size")
 
@@ -60,9 +71,9 @@ struct FolderSyncView: View {
                     Spacer(minLength: 0)
                 }
 
+                // The list takes every point left over; the states that only show a line
+                // of text stay at the top through the frame's alignment below.
                 content
-
-                Spacer(minLength: 0)
             }
             .padding(.horizontal, 28)
             .padding(.top, 22)
@@ -78,7 +89,13 @@ struct FolderSyncView: View {
                         .lineLimit(2)
                 }
                 Spacer()
-                // A long error message must not squeeze the button out of the row.
+                // A long error message must not squeeze the buttons out of the row.
+                if showsRescan {
+                    Button("Rescan") { model.compare() }
+                        .controlSize(.large)
+                        .help("Compare the folders again — picks up files that changed since the last scan.")
+                        .fixedSize()
+                }
                 primaryButton
                     .fixedSize()
             }
@@ -160,7 +177,9 @@ struct FolderSyncView: View {
                     }
                 }
             }
-            .frame(maxHeight: .infinity)
+            // The failures list fills what is left; a run without failures keeps its
+            // banner up with the rest of the screen instead of floating in the middle.
+            .frame(maxHeight: .infinity, alignment: .top)
         }
     }
 
@@ -236,8 +255,15 @@ struct FolderSyncView: View {
                     .frame(maxHeight: .infinity)
                 }
             }
-            .frame(maxHeight: .infinity)
+            .frame(maxHeight: .infinity, alignment: .top)
         }
+    }
+
+    /// The copy button takes the primary slot, so re-running the comparison needs its
+    /// own button: source folders keep changing on disk while the list is up.
+    private var showsRescan: Bool {
+        guard case .compared = model.phase else { return false }
+        return !model.filesToCopy.isEmpty || !model.tagUpdates.isEmpty
     }
 
     @ViewBuilder
