@@ -11,7 +11,10 @@
     /// - `COPIER_SNAPSHOT_DIR=<dir>` — write a PNG of the window on every phase change.
     /// - `COPIER_SNAPSHOT_OPEN=settings|sync` — also open that screen and snapshot it.
     /// - `COPIER_SNAPSHOT_COMPARE=1` — with `sync`, also run Compare and snapshot the result.
+    /// - `COPIER_SNAPSHOT_COPY=1` — with `sync`, also run the copy and snapshot it running and done.
     /// - `COPIER_FIXTURE_CARD=<dir>` — expose a folder as a card (read in `CopierApp`).
+    /// - `COPIER_WINDOW_SIZE=920x620` — force the main window's content size, so a run
+    ///   can check the layout at the window's minimum.
     enum DebugSupport {
         private static var environment: [String: String] { ProcessInfo.processInfo.environment }
 
@@ -48,7 +51,23 @@
             return value == "1" || value.lowercased() == "true"
         }
 
+        /// With `COPIER_SNAPSHOT_COMPARE=1`, also press the copy button afterwards and
+        /// snapshot `sync-copying.png` and `sync-finished.png`: `COPIER_SNAPSHOT_COPY=1`.
+        static var copies: Bool {
+            let value = environment["COPIER_SNAPSHOT_COPY"] ?? ""
+            return value == "1" || value.lowercased() == "true"
+        }
+
         static var isSnapshotting: Bool { snapshotDirectory != nil }
+
+        /// Resizes the main window's content to `COPIER_WINDOW_SIZE`, when set.
+        @MainActor
+        static func applyWindowSize() {
+            guard let value = environment["COPIER_WINDOW_SIZE"] else { return }
+            let parts = value.lowercased().split(separator: "x").compactMap { Double($0) }
+            guard parts.count == 2, let window = targetWindow(for: "main") else { return }
+            window.setContentSize(CGSize(width: parts[0], height: parts[1]))
+        }
 
         /// Write `<dir>/<name>.png` after `delay` seconds, so layout and animations settle.
         static func snapshot(_ name: String, delay: Double = 1.0) {
@@ -156,6 +175,7 @@
             .task {
                 await DebugSupport.probeNAS()
                 guard DebugSupport.isSnapshotting else { return }
+                DebugSupport.applyWindowSize()
                 DebugSupport.snapshot("launch", delay: 2)
                 if DebugSupport.startsScan {
                     // Let the card show up first, then take the step the user would take.
@@ -170,11 +190,19 @@
                 case "sync":
                     try? await Task.sleep(for: .seconds(3))
                     screen.wrappedValue = .folderSync
+                    DebugSupport.applyWindowSize()
                     DebugSupport.snapshot("sync")
                     if DebugSupport.startsCompare, sync.canCompare {
                         try? await Task.sleep(for: .seconds(2))
                         sync.compare()
                         DebugSupport.snapshot("sync-compared", delay: 4)
+                        if DebugSupport.copies {
+                            // The comparison runs off the main actor; give it time to land.
+                            try? await Task.sleep(for: .seconds(6))
+                            sync.copyMissing()
+                            DebugSupport.snapshot("sync-copying", delay: 0.4)
+                            DebugSupport.snapshot("sync-finished", delay: 8)
+                        }
                     }
                 default:
                     break
