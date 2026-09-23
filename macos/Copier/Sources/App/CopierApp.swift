@@ -9,6 +9,7 @@ struct CopierApp: App {
     @State private var sync: SyncModel
     @State private var settings: SettingsModel
     @State private var router = SettingsRouter()
+    @State private var updater = Updater()
 
     init() {
         #if DEBUG
@@ -48,6 +49,10 @@ struct CopierApp: App {
         }
         .defaultSize(width: 1040, height: 700)
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { updater.checkForUpdates() }
+                    .disabled(!updater.canCheckForUpdates)
+            }
             CommandGroup(replacing: .newItem) {}
             CommandGroup(after: .toolbar) {
                 Button("Scan Card") { backup.startScan() }
@@ -60,7 +65,7 @@ struct CopierApp: App {
         }
 
         Settings {
-            SettingsWindow(model: settings, router: router)
+            SettingsWindow(model: settings, router: router, updater: updater)
         }
     }
 
