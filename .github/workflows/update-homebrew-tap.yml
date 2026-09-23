@@ -58,6 +58,8 @@ jobs:
             desc "Back up photos and videos from SD cards to NAS or SSD"
             homepage "https://github.com/yannickpulver/copier"
 
+            # Sparkle updates the app in place, so brew shouldn't try to as well.
+            auto_updates true
             depends_on macos: ">= :tahoe"
 
             app "Copier.app"

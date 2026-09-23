@@ -19,6 +19,7 @@ final class SettingsRouter {
 struct SettingsWindow: View {
     @Bindable var model: SettingsModel
     @Bindable var router: SettingsRouter
+    @Bindable var updater: Updater
 
     var body: some View {
         TabView(selection: $router.tab) {
@@ -28,7 +29,7 @@ struct SettingsWindow: View {
             NASTab(model: model)
                 .tabItem { Label("NAS", systemImage: "externaldrive.connected.to.line.below") }
                 .tag(SettingsTab.nas)
-            NamingTab(model: model)
+            NamingTab(model: model, updater: updater)
                 .tabItem { Label("Naming", systemImage: "textformat") }
                 .tag(SettingsTab.naming)
         }
@@ -417,6 +418,7 @@ private struct NASTab: View {
 
 private struct NamingTab: View {
     @Bindable var model: SettingsModel
+    @Bindable var updater: Updater
 
     var body: some View {
         Form {
@@ -441,6 +443,10 @@ private struct NamingTab: View {
                 LabeledContent("YY", value: "Two-digit year")
                 LabeledContent("MM", value: "Month")
                 LabeledContent("DD", value: "Day")
+            }
+
+            Section("Updates") {
+                Toggle("Automatically check for updates", isOn: $updater.automaticallyChecksForUpdates)
             }
         }
         .formStyle(.grouped)

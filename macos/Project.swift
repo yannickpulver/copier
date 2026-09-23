@@ -70,6 +70,7 @@ let project = Project(
     organizationName: "Yannick Pulver",
     packages: [
         .local(path: "CopierCore"),
+        .remote(url: "https://github.com/sparkle-project/Sparkle", requirement: .upToNextMajor(from: "2.10.0")),
     ],
     settings: .settings(base: sharedSettings),
     targets: [
@@ -86,6 +87,11 @@ let project = Project(
                 "LSApplicationCategoryType": "public.app-category.photography",
                 "LSMinimumSystemVersion": "$(MACOSX_DEPLOYMENT_TARGET)",
                 "NSHumanReadableCopyright": "© Yannick Pulver",
+                // Sparkle: the release workflow attaches `appcast.xml` to every release and
+                // signs the zip with the private half of this key (`SPARKLE_PRIVATE_KEY`).
+                "SUFeedURL": "https://github.com/yannickpulver/copier/releases/latest/download/appcast.xml",
+                "SUPublicEDKey": "tGT29fSlZ7vDkKObxYYT0q20BBewKrfRFQfUBL7oW3o=",
+                "SUEnableAutomaticChecks": true,
                 // The NAS host is user-configured and ships a self-signed certificate,
                 // so App Transport Security can't be scoped to a domain exception.
                 "NSAppTransportSecurity": ["NSAllowsArbitraryLoads": true],
@@ -104,6 +110,7 @@ let project = Project(
             resources: ["Copier/Resources/**"],
             dependencies: [
                 .package(product: "CopierCore"),
+                .package(product: "Sparkle"),
             ],
             settings: .settings(
                 base: appSettings,

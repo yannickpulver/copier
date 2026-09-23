@@ -44,6 +44,9 @@ jobs:
       # Secrets can't be used directly in `if:` conditions, so mirror the ones
       # that gate signing/notarization into env vars once, here.
       HAS_APPLE_SECRETS: ${{ secrets.APPLE_ID != '' && secrets.APPLE_CERTIFICATE_BASE64 != '' }}
+      HAS_SPARKLE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY != '' }}
+      # Command-line tools (sign_update) for the appcast; matches the SPM version in Project.swift.
+      SPARKLE_VERSION: "2.10.0"
     steps:
       - uses: actions/checkout@v4
 
@@ -189,10 +192,45 @@ jobs:
           spctl -a -vv "$RUNNER_TEMP/export/Copier.app"
           codesign --verify --deep --strict --verbose=2 "$RUNNER_TEMP/export/Copier.app"
 
+      - name: Write Sparkle appcast
+        # The app reads releases/latest/download/appcast.xml, so every release carries
+        # a one-item feed for its own zip. Only a notarized zip goes into a feed.
+        if: env.HAS_APPLE_SECRETS == 'true' && env.HAS_SPARKLE_KEY == 'true'
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          BUILD: ${{ github.run_number }}
+        run: |
+          curl -fsSL -o sparkle.tar.xz \
+            "https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz"
+          mkdir sparkle && tar -xJf sparkle.tar.xz -C sparkle
+          # Prints `sparkle:edSignature="…" length="…"`, the attributes of <enclosure>.
+          SIGNATURE=$(echo "$SPARKLE_PRIVATE_KEY" | sparkle/bin/sign_update --ed-key-file - "Copier-${VERSION}.zip")
+          URL="https://github.com/${{ github.repository }}/releases/download/v${VERSION}/Copier-${VERSION}.zip"
+          cat > appcast.xml <<XML
+          <?xml version="1.0" encoding="utf-8"?>
+          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+            <channel>
+              <title>Copier</title>
+              <item>
+                <title>Copier ${VERSION}</title>
+                <pubDate>$(date -u "+%a, %d %b %Y %H:%M:%S +0000")</pubDate>
+                <sparkle:version>${BUILD}</sparkle:version>
+                <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
+                <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+                <sparkle:fullReleaseNotesLink>https://github.com/${{ github.repository }}/releases/tag/v${VERSION}</sparkle:fullReleaseNotesLink>
+                <enclosure url="${URL}" type="application/octet-stream" ${SIGNATURE} />
+              </item>
+            </channel>
+          </rss>
+          XML
+          cat appcast.xml
+
       - uses: actions/upload-artifact@v4
         with:
           name: build-macos
-          path: Copier-*.zip
+          path: |
+            Copier-*.zip
+            appcast.xml
 
   release:
     runs-on: ubuntu-latest
