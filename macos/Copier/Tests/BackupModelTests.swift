@@ -400,6 +400,80 @@ struct BackupModelTests {
         #expect(model.folderChoices(for: model.days[0]).first == "2026.09.18 - Already there")
     }
 
+    @Test("switching the destination keeps the folder names already typed")
+    func switchingDestinationKeepsTitles() async throws {
+        let fixture = try Fixture(days: Self.twoDays)
+        defer { fixture.remove() }
+        let other = fixture.root.appendingPathComponent("other")
+        let existing = other.appendingPathComponent("2026.09.19 - Already there")
+        try FileManager.default.createDirectory(at: existing, withIntermediateDirectories: true)
+
+        let model = makeModel(fixture)
+        await model.refreshCards()
+        model.startScan()
+        try await wait(for: model, until: isReview)
+
+        model.setTitle("Wedding", for: model.days[0])
+        model.setDestination(other)
+        try await wait(for: model, until: { $0.existingFolderNames.contains(existing.lastPathComponent) })
+
+        #expect(model.target(for: model.days[0]) == .new(title: "Wedding"))
+        // A day without a typed name still picks up the new destination's same-day folder.
+        #expect(model.target(for: model.days[1]) == .existing(existing))
+
+        model.structure = .oneFolder
+        model.setTitle("Trip", for: model.days[0])
+        model.setDestination(fixture.destination)
+        try await wait(for: model, until: { $0.existingFolderNames.isEmpty })
+        #expect(model.target(for: model.days[0]) == .new(title: "Trip"))
+    }
+
+    @Test("splitting a day gives each time block its own folder, merging puts it back")
+    func splitAndMergeDay() async throws {
+        let fixture = try Fixture(days: [
+            ("2026-09-18", [("IMG_0001.JPG", 1000), ("IMG_0002.JPG", 1000), ("IMG_0003.JPG", 1000), ("IMG_0004.JPG", 1000)]),
+        ])
+        defer { fixture.remove() }
+        // Morning and afternoon shoots, hours apart.
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        for name in ["IMG_0003.JPG", "IMG_0004.JPG"] {
+            let date = try #require(formatter.date(from: "2026-09-18 15:00"))
+            try FileManager.default.setAttributes(
+                [.modificationDate: date],
+                ofItemAtPath: fixture.card.appendingPathComponent("DCIM/100TEST/\(name)").path
+            )
+        }
+
+        let model = makeModel(fixture)
+        await model.refreshCards()
+        model.startScan()
+        try await wait(for: model, until: isReview)
+
+        let day = try #require(model.days.first)
+        #expect(model.canSplit(day))
+        model.setTitle("Wedding", for: day)
+        model.split(day)
+
+        // The first block keeps the day's name, the second starts untitled.
+        let morning = ShootKey(day: day.day, block: 0)
+        let afternoon = ShootKey(day: day.day, block: 1)
+        #expect(model.target(for: morning) == .new(title: "Wedding"))
+        model.setTitle("Brunch", for: afternoon)
+        #expect(model.plan.folders.map(\.url.lastPathComponent) == ["2026.09.18 - Wedding", "2026.09.18 - Brunch"])
+        #expect(model.plan.folders.map(\.files.count) == [2, 2])
+
+        // The same name for both blocks puts them back into one folder.
+        model.setTitle("Wedding", for: afternoon)
+        #expect(model.plan.folders.map(\.url.lastPathComponent) == ["2026.09.18 - Wedding"])
+
+        model.setTitle("Brunch", for: afternoon)
+        model.merge(day)
+        #expect(model.isSplit(day) == false)
+        #expect(model.plan.folders.map(\.url.lastPathComponent) == ["2026.09.18 - Wedding"])
+        #expect(model.plan.fileCount == 4)
+    }
+
     @Test("a check path that is not mounted is reported instead of silently skipped")
     func unreachableCheckPathIsReported() async throws {
         let fixture = try Fixture(days: Self.twoDays)

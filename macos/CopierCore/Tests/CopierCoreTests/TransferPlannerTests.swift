@@ -114,6 +114,22 @@ struct TransferPlannerTests {
         ])
     }
 
+    @Test("groups of one day get their own folders, equal names share one, empty groups are dropped")
+    func groups() {
+        let plan = TransferPlanner.plan(
+            groups: [
+                PlanGroup(day: dayOne, target: .new(title: "Wedding"), files: [file("a.jpg", day: "2026-09-17")]),
+                PlanGroup(day: dayOne, target: .new(title: "Brunch"), files: [file("b.jpg", day: "2026-09-17")]),
+                PlanGroup(day: dayOne, target: .new(title: "Wedding"), files: [file("c.jpg", day: "2026-09-17")]),
+                PlanGroup(day: dayTwo, target: .new(title: ""), files: []),
+            ],
+            destination: destination
+        )
+        #expect(plan.folders.map(\.url.lastPathComponent) == ["2026.09.17 - Wedding", "2026.09.17 - Brunch"])
+        #expect(plan.folders[0].files.map(\.name) == ["a.jpg", "c.jpg"])
+        #expect(plan.fileCount == 3)
+    }
+
     @Test("no files means no jobs")
     func empty() {
         let plan = TransferPlanner.plan(files: [], structure: .folderPerDay, targets: [:], destination: destination)

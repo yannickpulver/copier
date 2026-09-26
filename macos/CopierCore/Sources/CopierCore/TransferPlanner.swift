@@ -54,6 +54,20 @@ public struct TransferPlan: Sendable {
     public var totalBytes: Int64 { jobs.reduce(0) { $0 + $1.file.size } }
 }
 
+/// Files that go into one folder, with the folder choice for them.
+public struct PlanGroup: Sendable {
+    /// The day the folder takes its date from.
+    public var day: Day?
+    public var target: FolderTarget
+    public var files: [MediaFile]
+
+    public init(day: Day?, target: FolderTarget, files: [MediaFile]) {
+        self.day = day
+        self.target = target
+        self.files = files
+    }
+}
+
 /// Turns the review screen's state into copy jobs.
 public enum TransferPlanner {
     /// Build the copy jobs.
@@ -77,21 +91,44 @@ public enum TransferPlanner {
         calendar: Calendar = .current
     ) -> TransferPlan {
         let groups = DayGrouping.group(files, calendar: calendar)
-        guard !groups.isEmpty else { return TransferPlan(folders: [], jobs: []) }
-
-        var folders: [PlannedFolder] = []
-
         switch structure {
         case .folderPerDay:
-            for group in groups {
-                let target = targets[group.day] ?? .new(title: "")
-                folders.append(folder(for: group.day, target: target, files: group.files, destination: destination, dateFormat: dateFormat))
-            }
+            return plan(
+                groups: groups.map { PlanGroup(day: $0.day, target: targets[$0.day] ?? .new(title: ""), files: $0.files) },
+                destination: destination,
+                cameraSubfolders: cameraSubfolders,
+                dateFormat: dateFormat
+            )
         case .oneFolder:
             let firstDay = groups.first?.day
             let target = targets[firstDay] ?? targets[nil] ?? .new(title: "")
-            let allFiles = groups.flatMap(\.files)
-            folders.append(folder(for: firstDay, target: target, files: allFiles, destination: destination, dateFormat: dateFormat))
+            return plan(
+                groups: [PlanGroup(day: firstDay, target: target, files: groups.flatMap(\.files))],
+                destination: destination,
+                cameraSubfolders: cameraSubfolders,
+                dateFormat: dateFormat
+            )
+        }
+    }
+
+    /// Build the copy jobs from groups the caller already formed — one day, one part of a
+    /// split day, or everything for one folder. Groups that resolve to the same folder
+    /// (two parts given the same title) share it; empty groups are dropped.
+    public static func plan(
+        groups: [PlanGroup],
+        destination: URL,
+        cameraSubfolders: Bool = false,
+        dateFormat: String = FolderNaming.defaultDateFormat
+    ) -> TransferPlan {
+        var folders: [PlannedFolder] = []
+        for group in groups where !group.files.isEmpty {
+            let planned = folder(for: group.day, target: group.target, files: group.files, destination: destination, dateFormat: dateFormat)
+            if let index = folders.firstIndex(where: { $0.url.path == planned.url.path }) {
+                folders[index].files += planned.files
+                folders[index].isNew = folders[index].isNew && planned.isNew
+            } else {
+                folders.append(planned)
+            }
         }
 
         var jobs: [CopyJob] = []

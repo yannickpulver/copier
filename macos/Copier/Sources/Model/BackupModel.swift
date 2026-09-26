@@ -61,6 +61,13 @@ struct ReviewDay: Identifiable, Sendable {
     }
 }
 
+/// What a folder choice belongs to: a whole day, or one time block of a split day.
+struct ShootKey: Hashable, Sendable {
+    var day: Day?
+    /// Index into ``ReviewDay/clusters``; `nil` for a day that is not split.
+    var block: Int?
+}
+
 /// A configured check location and whether it answered.
 struct LocationStatus: Identifiable, Sendable, Hashable {
     /// Matches ``BackupIndexSource/name`` so a pill can switch its source off.
@@ -157,7 +164,9 @@ final class BackupModel {
     private(set) var orderedDays: [ReviewDay] = []
     private(set) var backedUpOnlyDayIDs: Set<String> = []
     var expandedDayID: String?
-    private(set) var targets: [Day?: FolderTarget] = [:]
+    private(set) var targets: [ShootKey: FolderTarget] = [:]
+    /// Days the user split into their time blocks — each block gets its own folder.
+    private(set) var splitDayIDs: Set<String> = []
     private(set) var oneFolderTarget: FolderTarget = .new(title: "")
     private(set) var existingFolderNames: [String] = []
     var cameraSubfolders: Bool = false {
@@ -284,10 +293,25 @@ final class BackupModel {
         backedUpOnlyDayIDs = settledIDs
     }
 
-    /// The target used for a day — one folder collapses every day onto one target.
-    func target(for day: ReviewDay) -> FolderTarget {
+    /// The target used for a day or block — one folder collapses everything onto one target.
+    func target(for key: ShootKey) -> FolderTarget {
         if structure == .oneFolder { return oneFolderTarget }
-        return targets[day.day] ?? .new(title: "")
+        return targets[key] ?? .new(title: "")
+    }
+
+    func target(for day: ReviewDay) -> FolderTarget {
+        target(for: ShootKey(day: day.day))
+    }
+
+    func isSplit(_ day: ReviewDay) -> Bool { splitDayIDs.contains(day.id) }
+
+    /// A day only offers a split when its files form more than one time block.
+    func canSplit(_ day: ReviewDay) -> Bool { day.clusters.count > 1 }
+
+    /// The keys a day's folder choices live under: one per block when split.
+    private func shootKeys(for day: ReviewDay) -> [ShootKey] {
+        guard isSplit(day) else { return [ShootKey(day: day.day)] }
+        return day.clusters.indices.map { ShootKey(day: day.day, block: $0) }
     }
 
     /// Day the one-folder name takes its date from: the first ticked day.
@@ -299,17 +323,30 @@ final class BackupModel {
     var plan: TransferPlan {
         guard let destination else { return TransferPlan(folders: [], jobs: []) }
         return TransferPlanner.plan(
-            files: tickedFiles,
-            structure: structure,
-            targets: effectiveTargets,
+            groups: planGroups,
             destination: destination,
             cameraSubfolders: cameraSubfolders,
             dateFormat: dependencies.settings.dateFormat
         )
     }
 
-    private var effectiveTargets: [Day?: FolderTarget] {
-        structure == .oneFolder ? [oneFolderDay: oneFolderTarget] : targets
+    /// The ticked files per folder choice: one group per day, per block of a split day,
+    /// or a single group for one folder.
+    private var planGroups: [PlanGroup] {
+        func tickedFiles(_ files: [ReviewFile]) -> [MediaFile] {
+            files.filter { ticked.contains($0.id) }.map(\.file)
+        }
+        if structure == .oneFolder {
+            return [PlanGroup(day: oneFolderDay, target: oneFolderTarget, files: tickedFiles(days.flatMap(\.files)))]
+        }
+        return days.flatMap { day -> [PlanGroup] in
+            guard isSplit(day) else {
+                return [PlanGroup(day: day.day, target: target(for: day), files: tickedFiles(day.files))]
+            }
+            return day.clusters.enumerated().map { block, cluster in
+                PlanGroup(day: day.day, target: target(for: ShootKey(day: day.day, block: block)), files: tickedFiles(cluster.files))
+            }
+        }
     }
 
     /// Folder name a target renders to, for display in the field and the picker.
@@ -429,6 +466,7 @@ final class BackupModel {
         backedUpOnlyDayIDs = []
         ticked = []
         targets = [:]
+        splitDayIDs = []
         oneFolderTarget = .new(title: "")
         existingFolderNames = []
         failedSources = []
@@ -537,26 +575,36 @@ final class BackupModel {
     }
 
     /// Preselect an existing folder per day when one with the same date exists.
+    /// A title the user already typed is kept — switching the destination must not wipe it.
     private func rebuildTargets() {
         guard let destination else {
             targets = [:]
             return
         }
         let format = dependencies.settings.dateFormat
-        var next: [Day?: FolderTarget] = [:]
+        var next: [ShootKey: FolderTarget] = [:]
         for group in days {
-            guard let day = group.day else {
-                next[nil] = .new(title: "")
-                continue
-            }
-            if let match = FolderNaming.preselectedFolder(in: existingFolderNames, for: day, format: format) {
-                next[day] = .existing(destination.appending(path: match, directoryHint: .notDirectory))
-            } else {
-                next[day] = .new(title: "")
+            for key in shootKeys(for: group) {
+                if let typed = targets[key], Self.hasTypedTitle(typed) {
+                    next[key] = typed
+                } else if let day = key.day, (key.block ?? 0) == 0,
+                          let match = FolderNaming.preselectedFolder(in: existingFolderNames, for: day, format: format) {
+                    // Only the whole day, or the first block of a split one, picks up the same-day folder.
+                    next[key] = .existing(destination.appending(path: match, directoryHint: .notDirectory))
+                } else {
+                    next[key] = .new(title: "")
+                }
             }
         }
         targets = next
-        oneFolderTarget = next[oneFolderDay] ?? .new(title: "")
+        if !Self.hasTypedTitle(oneFolderTarget) {
+            oneFolderTarget = next[ShootKey(day: oneFolderDay)] ?? .new(title: "")
+        }
+    }
+
+    private static func hasTypedTitle(_ target: FolderTarget) -> Bool {
+        if case let .new(title) = target { return !title.isEmpty }
+        return false
     }
 
     private func autoEnableCameraSubfolders() {
@@ -601,22 +649,54 @@ final class BackupModel {
 
     // MARK: - Folder targets
 
+    func setTitle(_ title: String, for key: ShootKey) {
+        setTarget(.new(title: title), for: key)
+    }
+
     func setTitle(_ title: String, for day: ReviewDay) {
+        setTitle(title, for: ShootKey(day: day.day))
+    }
+
+    func setExistingFolder(_ url: URL?, for key: ShootKey) {
+        setTarget(url.map { .existing($0) } ?? .new(title: ""), for: key)
+    }
+
+    func setExistingFolder(_ url: URL?, for day: ReviewDay) {
+        setExistingFolder(url, for: ShootKey(day: day.day))
+    }
+
+    private func setTarget(_ target: FolderTarget, for key: ShootKey) {
         if structure == .oneFolder {
-            oneFolderTarget = .new(title: title)
+            oneFolderTarget = target
         } else {
-            targets[day.day] = .new(title: title)
+            targets[key] = target
         }
         shortfall = nil
     }
 
-    func setExistingFolder(_ url: URL?, for day: ReviewDay) {
-        let target: FolderTarget = url.map { .existing($0) } ?? .new(title: "")
-        if structure == .oneFolder {
-            oneFolderTarget = target
-        } else {
-            targets[day.day] = target
+    /// Give each time block of `day` its own folder. The first block keeps the day's
+    /// current choice, the others start as new, untitled folders.
+    func split(_ day: ReviewDay) {
+        guard canSplit(day), !isSplit(day) else { return }
+        let whole = ShootKey(day: day.day)
+        let current = targets[whole] ?? .new(title: "")
+        targets[whole] = nil
+        for block in day.clusters.indices {
+            targets[ShootKey(day: day.day, block: block)] = block == 0 ? current : .new(title: "")
         }
+        splitDayIDs.insert(day.id)
+        shortfall = nil
+    }
+
+    /// Undo ``split(_:)``: the day goes back to one folder, the first block's choice.
+    func merge(_ day: ReviewDay) {
+        guard isSplit(day) else { return }
+        let first = targets[ShootKey(day: day.day, block: 0)] ?? .new(title: "")
+        for block in day.clusters.indices {
+            targets[ShootKey(day: day.day, block: block)] = nil
+        }
+        targets[ShootKey(day: day.day)] = first
+        splitDayIDs.remove(day.id)
         shortfall = nil
     }
 

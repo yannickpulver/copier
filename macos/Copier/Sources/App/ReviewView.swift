@@ -155,6 +155,11 @@ struct ReviewView: View {
                 let isExpanded = model.expandedDayID == day.id
                 VStack(spacing: 0) {
                     DayHeaderRow(model: model, day: day, isExpanded: isExpanded, isSettled: isSettled)
+                    if model.isSplit(day), !isSettled, model.structure == .folderPerDay {
+                        ForEach(Array(day.clusters.enumerated()), id: \.element.id) { block, cluster in
+                            BlockRow(model: model, day: day, block: block, cluster: cluster)
+                        }
+                    }
                     if isExpanded {
                         Divider()
                         FileList(model: model, day: day)
@@ -224,7 +229,35 @@ private struct DayHeaderRow: View {
                     .lineLimit(1)
                 Spacer(minLength: 8)
             } else if model.structure == .folderPerDay {
-                FolderField(model: model, day: day)
+                if model.isSplit(day) {
+                    Text("\(day.clusters.count) shoots")
+                        .font(Theme.secondary)
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
+                    Spacer(minLength: 8)
+                    Button {
+                        model.merge(day)
+                    } label: {
+                        Label("Merge", systemImage: "arrow.triangle.merge")
+                            .font(Theme.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Put the whole day back into one folder")
+                    .fixedSize()
+                } else {
+                    FolderField(model: model, day: day)
+                    if model.canSplit(day) {
+                        Button {
+                            model.split(day)
+                        } label: {
+                            Image(systemName: "scissors")
+                                .font(.system(size: 12))
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Split into \(day.clusters.count) shoots, one folder each")
+                        .accessibilityLabel("Split day")
+                    }
+                }
             } else {
                 Spacer(minLength: 8)
             }
@@ -239,6 +272,34 @@ private struct DayHeaderRow: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
         .background(isSettled ? AnyShapeStyle(.clear) : AnyShapeStyle(Color.accentColor.opacity(0.07)))
+    }
+}
+
+/// One time block of a split day: its time span and its own folder field.
+private struct BlockRow: View {
+    @Bindable var model: BackupModel
+    let day: ReviewDay
+    let block: Int
+    let cluster: FileCluster
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(Format.span(from: cluster.start, to: cluster.end))
+                .font(Theme.secondary)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+                .fixedSize()
+            Text("\(Format.count(cluster.files.count)) file\(cluster.files.count == 1 ? "" : "s")")
+                .font(Theme.secondary)
+                .foregroundStyle(.tertiary)
+                .monospacedDigit()
+                .fixedSize()
+            FolderField(model: model, day: day, block: block)
+        }
+        .padding(.leading, 42)
+        .padding(.trailing, 14)
+        .padding(.bottom, 7)
+        .background(Color.accentColor.opacity(0.07))
     }
 }
 
@@ -366,6 +427,10 @@ private struct FileRow: View {
                 .frame(width: 70, alignment: .trailing)
         }
         .frame(height: 24)
+        // A click anywhere but the checkbox shows the file on the card in Finder.
+        .contentShape(.rect)
+        .onTapGesture { NSWorkspace.shared.activateFileViewerSelecting([file.file.url]) }
+        .help("Show in Finder")
     }
 }
 
