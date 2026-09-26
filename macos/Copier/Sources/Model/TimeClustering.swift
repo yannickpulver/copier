@@ -38,8 +38,8 @@ extension MediaFile {
     }
 }
 
-/// A run of files taken close together, used to break a long day apart visually.
-/// Display only — it never changes where files are copied.
+/// A run of files taken close together, used to break a long day apart. When the user
+/// splits a day, each cluster becomes a block with its own folder.
 struct FileCluster: Identifiable, Sendable {
     var files: [ReviewFile]
     var start: Date?

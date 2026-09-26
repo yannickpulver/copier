@@ -7,17 +7,20 @@ import SwiftUI
 struct FolderField: View {
     @Bindable var model: BackupModel
     let day: ReviewDay
+    /// The time block of a split day this field names; `nil` for the whole day.
+    var block: Int?
     @State private var showsPicker = false
 
-    private var target: FolderTarget { model.target(for: day) }
+    private var key: ShootKey { ShootKey(day: day.day, block: block) }
+    private var target: FolderTarget { model.target(for: key) }
 
     private var titleBinding: Binding<String> {
         Binding(
             get: {
-                if case let .new(title) = model.target(for: day) { return title }
+                if case let .new(title) = target { return title }
                 return ""
             },
-            set: { model.setTitle($0, for: day) }
+            set: { model.setTitle($0, for: key) }
         )
     }
 
@@ -58,7 +61,7 @@ struct FolderField: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Choose existing folder")
             .popover(isPresented: $showsPicker, arrowEdge: .bottom) {
-                FolderPicker(model: model, day: day, isPresented: $showsPicker)
+                FolderPicker(model: model, day: day, key: key, isPresented: $showsPicker)
             }
         }
         .padding(.leading, 9)
@@ -77,12 +80,13 @@ struct FolderField: View {
 private struct FolderPicker: View {
     @Bindable var model: BackupModel
     let day: ReviewDay
+    let key: ShootKey
     @Binding var isPresented: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Button {
-                model.setExistingFolder(nil, for: day)
+                model.setExistingFolder(nil, for: key)
                 isPresented = false
             } label: {
                 HStack(spacing: 8) {
@@ -111,7 +115,7 @@ private struct FolderPicker: View {
                         ForEach(choices, id: \.self) { name in
                             Button {
                                 if let destination = model.destination {
-                                    model.setExistingFolder(destination.appending(path: name, directoryHint: .notDirectory), for: day)
+                                    model.setExistingFolder(destination.appending(path: name, directoryHint: .notDirectory), for: key)
                                 }
                                 isPresented = false
                             } label: {
@@ -142,7 +146,7 @@ private struct FolderPicker: View {
             Divider().padding(.vertical, 4)
             Button {
                 if let url = FolderPanel.chooseFolder(title: "Choose a folder", start: model.destination) {
-                    model.setExistingFolder(url, for: day)
+                    model.setExistingFolder(url, for: key)
                 }
                 isPresented = false
             } label: {
@@ -159,12 +163,12 @@ private struct FolderPicker: View {
     }
 
     private var isNew: Bool {
-        if case .new = model.target(for: day) { return true }
+        if case .new = model.target(for: key) { return true }
         return false
     }
 
     private func isSelected(_ name: String) -> Bool {
-        if case let .existing(url) = model.target(for: day) { return url.lastPathComponent == name }
+        if case let .existing(url) = model.target(for: key) { return url.lastPathComponent == name }
         return false
     }
 }
