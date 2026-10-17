@@ -158,55 +158,21 @@ public actor SynologyClient {
     /// Index the configured folders.
     ///
     /// Folders are traversed newest-first (names sorted descending) and the walk
-    /// stops as soon as every key in `targetKeys` has been found.
+    /// stops as soon as every key in `targetKeys` has been found. With a `cacheFile`,
+    /// unchanged folders are not read again.
     public func index(
         folders: [String],
         targetKeys: Set<FileKey>? = nil,
+        cacheFile: URL? = nil,
         progress: (@Sendable (ScanProgress) -> Void)? = nil
     ) async throws -> LocationIndex {
-        var index = LocationIndex()
-        var remaining = targetKeys
-        var scanned = 0
-
-        for root in folders {
-            var stack: [String] = [root]
-            while let folder = stack.popLast() {
-                if Task.isCancelled { throw BackupError.cancelled }
-                scanned += 1
-                if scanned % 5 == 0 {
-                    progress?(ScanProgress(count: scanned, folder: folder.split(separator: "/").last.map(String.init) ?? folder))
-                }
-
-                var subdirectories: [String] = []
-                var offset = 0
-                while true {
-                    let response = try await list(folder: folder, offset: offset)
-                    guard response.success, let items = response.files, !items.isEmpty else { break }
-                    for item in items {
-                        if item.isDirectory {
-                            subdirectories.append(item.path)
-                        } else {
-                            let key = FileKey(name: item.name, size: item.size)
-                            index.add(key, folder: URL(fileURLWithPath: folder))
-                            remaining?.remove(key)
-                        }
-                    }
-                    if items.count < pageSize { break }
-                    offset += pageSize
-                }
-
-                if let remaining, remaining.isEmpty {
-                    progress?(ScanProgress(count: scanned, folder: "done — all found"))
-                    return index
-                }
-
-                // Ascending push, pop() takes from the end — newest folders first.
-                stack.append(contentsOf: subdirectories.sorted())
-            }
-        }
-
-        progress?(ScanProgress(count: scanned, folder: "done"))
-        return index
+        try await FolderWalk.index(
+            roots: folders,
+            browser: self,
+            targetKeys: targetKeys,
+            cacheFile: cacheFile,
+            progress: progress
+        )
     }
 
     /// The subfolders of one folder, e.g. `listFolders(in: "/photo")` → `["/photo/2026", …]`.
@@ -244,51 +210,45 @@ public actor SynologyClient {
 
     // MARK: - Requests
 
-    private struct ListItem {
-        var name: String
-        var path: String
-        var size: Int64
-        var isDirectory: Bool
+    /// Every entry of one folder, page by page. `dirsOnly` leaves the files out.
+    /// - Throws: ``BackupError/nasUnreachable(host:reason:)`` when a page fails.
+    private func listAll(folder: String, dirsOnly: Bool) async throws -> [[String: Any]] {
+        var entries: [[String: Any]] = []
+        var offset = 0
+        while true {
+            var components = URLComponents(url: baseURL.appendingPathComponent("webapi/entry.cgi"), resolvingAgainstBaseURL: false)!
+            components.queryItems = [
+                URLQueryItem(name: "api", value: "SYNO.FileStation.List"),
+                URLQueryItem(name: "version", value: "2"),
+                URLQueryItem(name: "method", value: "list"),
+                URLQueryItem(name: "folder_path", value: folder),
+                URLQueryItem(name: "additional", value: "[\"size\",\"time\"]"),
+                URLQueryItem(name: "limit", value: String(pageSize)),
+                URLQueryItem(name: "offset", value: String(offset)),
+                URLQueryItem(name: "_sid", value: sessionID ?? ""),
+            ]
+            if dirsOnly {
+                components.queryItems?.append(URLQueryItem(name: "filetype", value: "dir"))
+            }
+            guard let url = components.url else { break }
+
+            let response = try await perform(URLRequest(url: url))
+            guard response.success, let page = response.data?["files"] as? [[String: Any]] else {
+                throw BackupError.nasUnreachable(host: config.host, reason: "could not list \(folder)")
+            }
+            entries.append(contentsOf: page)
+            if page.count < pageSize { break }
+            offset += pageSize
+        }
+        return entries
     }
 
-    private struct ListResponse {
-        var success: Bool
-        var files: [ListItem]?
-    }
-
-    private func list(folder: String, offset: Int) async throws -> ListResponse {
-        var components = URLComponents(url: baseURL.appendingPathComponent("webapi/entry.cgi"), resolvingAgainstBaseURL: false)!
-        components.queryItems = [
-            URLQueryItem(name: "api", value: "SYNO.FileStation.List"),
-            URLQueryItem(name: "version", value: "2"),
-            URLQueryItem(name: "method", value: "list"),
-            URLQueryItem(name: "folder_path", value: folder),
-            URLQueryItem(name: "additional", value: "[\"size\"]"),
-            URLQueryItem(name: "limit", value: String(pageSize)),
-            URLQueryItem(name: "offset", value: String(offset)),
-            URLQueryItem(name: "_sid", value: sessionID ?? ""),
-        ]
-        guard let url = components.url else { return ListResponse(success: false, files: nil) }
-
-        let response: SynologyResponse
-        do {
-            response = try await perform(URLRequest(url: url))
-        } catch {
-            // A failing folder is skipped, as in the Electron client.
-            return ListResponse(success: false, files: nil)
-        }
-        guard response.success, let raw = response.data?["files"] as? [[String: Any]] else {
-            return ListResponse(success: response.success, files: nil)
-        }
-        let items = raw.map { entry in
-            ListItem(
-                name: entry["name"] as? String ?? "",
-                path: entry["path"] as? String ?? "",
-                size: ((entry["additional"] as? [String: Any])?["size"] as? NSNumber)?.int64Value ?? 0,
-                isDirectory: (entry["isdir"] as? Bool) ?? false
-            )
-        }
-        return ListResponse(success: true, files: items)
+    private static func subfolder(_ entry: [String: Any], in folder: String) -> Subfolder? {
+        guard (entry["isdir"] as? Bool) == true else { return nil }
+        let path = (entry["path"] as? String) ?? "\(folder)/\(entry["name"] as? String ?? "")"
+        let mtime = (((entry["additional"] as? [String: Any])?["time"] as? [String: Any])?["mtime"] as? NSNumber)?
+            .doubleValue
+        return Subfolder(path: path, modified: mtime.map { Date(timeIntervalSince1970: $0) })
     }
 
     private struct SynologyResponse {
@@ -330,5 +290,26 @@ public actor SynologyClient {
             return "\(name)=\(value)"
         }
         return Data(pairs.joined(separator: "&").utf8)
+    }
+}
+
+extension SynologyClient: FolderBrowser {
+    public func list(_ folder: String) async throws -> FolderListing {
+        var files: [FileKey] = []
+        var subfolders: [Subfolder] = []
+        for entry in try await listAll(folder: folder, dirsOnly: false) {
+            if let subfolder = Self.subfolder(entry, in: folder) {
+                subfolders.append(subfolder)
+            } else {
+                let size = ((entry["additional"] as? [String: Any])?["size"] as? NSNumber)?.int64Value ?? 0
+                files.append(FileKey(name: entry["name"] as? String ?? "", size: size))
+            }
+        }
+        return FolderListing(files: files, subfolders: subfolders)
+    }
+
+    /// One directory-only listing — a folder full of photos is a single small request.
+    public func subfolders(of folder: String, cached: [String]) async throws -> [Subfolder] {
+        try await listAll(folder: folder, dirsOnly: true).compactMap { Self.subfolder($0, in: folder) }
     }
 }

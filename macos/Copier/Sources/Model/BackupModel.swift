@@ -107,10 +107,16 @@ struct BackupDependencies: Sendable {
         var result: [any BackupIndexSource] = []
         if let config = await CredentialResolver.synologyConfig(settings: settings) {
             result.append(
-                SynologySource(client: SynologyClient(config: config), folders: config.folders)
+                SynologySource(
+                    client: SynologyClient(config: config),
+                    folders: config.folders,
+                    cacheFile: FolderCache.fileURL(name: "synology-\(config.host)-\(config.port)-\(config.user)")
+                )
             )
         }
-        result.append(contentsOf: settings.checkPaths.map(LocalPathSource.init))
+        result.append(contentsOf: settings.checkPaths.map {
+            LocalPathSource($0, cacheFile: FolderCache.fileURL(name: "local\($0.path)"))
+        })
         return result
     }
 }

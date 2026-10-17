@@ -92,67 +92,24 @@ public enum Matcher {
     /// Index a local (or SMB-mounted) path.
     ///
     /// Newest folders are visited first, and the walk stops early once every key in
-    /// `targetKeys` has been found.
+    /// `targetKeys` has been found. With a `cacheFile`, unchanged folders are not read again.
     public static func indexLocalPath(
         _ root: URL,
         targetKeys: Set<FileKey>? = nil,
+        cacheFile: URL? = nil,
         progress: (@Sendable (ScanProgress) -> Void)? = nil
     ) async -> LocationIndex {
-        var index = LocationIndex()
-        var remaining = targetKeys
-        await walk(root, index: &index, remaining: &remaining, progress: progress)
-        return index
-    }
-
-    @discardableResult
-    private static func walk(
-        _ directory: URL,
-        index: inout LocationIndex,
-        remaining: inout Set<FileKey>?,
-        progress: (@Sendable (ScanProgress) -> Void)?
-    ) async -> Bool {
-        if Task.isCancelled { return true }
-
-        let keys: [URLResourceKey] = [.isDirectoryKey, .isRegularFileKey, .fileSizeKey]
-        let entries = (try? FileManager.default.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: keys,
-            options: []
-        )) ?? []
-
-        progress?(ScanProgress(count: index.count, folder: directory.lastPathComponent))
-
-        var subdirectories: [URL] = []
-        var fileURLs: [URL] = []
-        for entry in entries {
-            let name = entry.lastPathComponent
-            if isIgnored(directoryName: name) { continue }
-            guard let values = try? entry.resourceValues(forKeys: Set(keys)) else { continue }
-            if values.isDirectory == true {
-                subdirectories.append(entry)
-            } else if values.isRegularFile == true {
-                fileURLs.append(entry)
-            }
-        }
-
-        let sized = await sizes(of: fileURLs)
-        for (name, size) in sized {
-            let key = FileKey(name: name, size: size)
-            index.add(key, folder: directory)
-            remaining?.remove(key)
-        }
-
-        if let remaining, remaining.isEmpty { return true }
-
-        // Descending so the newest (date-named) folders are scanned first.
-        for sub in subdirectories.sorted(by: { $0.lastPathComponent > $1.lastPathComponent }) {
-            if await walk(sub, index: &index, remaining: &remaining, progress: progress) { return true }
-        }
-        return false
+        (try? await FolderWalk.index(
+            roots: [root.path],
+            browser: LocalFolderBrowser(),
+            targetKeys: targetKeys,
+            cacheFile: cacheFile,
+            progress: progress
+        )) ?? LocationIndex()
     }
 
     /// Stat a batch of files with bounded concurrency.
-    private static func sizes(of urls: [URL]) async -> [(String, Int64)] {
+    static func sizes(of urls: [URL]) async -> [(String, Int64)] {
         guard !urls.isEmpty else { return [] }
         let limit = min(statConcurrency, urls.count)
         return await withTaskGroup(of: (String, Int64)?.self) { group in
@@ -288,4 +245,54 @@ public enum Matcher {
             .sorted()
     }
 
+}
+
+/// Reads a local or SMB-mounted folder.
+struct LocalFolderBrowser: FolderBrowser {
+    func list(_ folder: String) async throws -> FolderListing {
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isRegularFileKey, .contentModificationDateKey]
+        let entries = try FileManager.default.contentsOfDirectory(
+            at: URL(fileURLWithPath: folder, isDirectory: true),
+            includingPropertiesForKeys: keys,
+            options: []
+        )
+
+        var subfolders: [Subfolder] = []
+        var fileURLs: [URL] = []
+        for entry in entries {
+            guard let values = try? entry.resourceValues(forKeys: Set(keys)) else { continue }
+            if values.isDirectory == true {
+                subfolders.append(Subfolder(path: entry.path, modified: values.contentModificationDate))
+            } else if values.isRegularFile == true {
+                fileURLs.append(entry)
+            }
+        }
+        let files = await Matcher.sizes(of: fileURLs).map { FileKey(name: $0.0, size: $0.1) }
+        return FolderListing(files: files, subfolders: subfolders)
+    }
+
+    /// One `stat` per cached subfolder, with bounded concurrency.
+    func subfolders(of folder: String, cached: [String]) async throws -> [Subfolder] {
+        await withTaskGroup(of: Subfolder?.self) { group in
+            var next = 0
+            func submit() {
+                let path = cached[next]
+                next += 1
+                group.addTask {
+                    let url = URL(fileURLWithPath: path, isDirectory: true)
+                    guard let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .contentModificationDateKey]),
+                          values.isDirectory == true
+                    else { return nil }
+                    return Subfolder(path: path, modified: values.contentModificationDate)
+                }
+            }
+            while next < min(Matcher.statConcurrency, cached.count) { submit() }
+            var result: [Subfolder] = []
+            while let finished = await group.next() {
+                if let finished { result.append(finished) }
+                if next < cached.count { submit() }
+            }
+            return result
+        }
+    }
 }

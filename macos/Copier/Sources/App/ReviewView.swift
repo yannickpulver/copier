@@ -49,7 +49,23 @@ struct ReviewView: View {
                 }
 
                 GroupedBox {
-                    dayList
+                    // The open day fills the space under the other days while that leaves it
+                    // `FileList.minHeight`. Past that the day list scrolls and the file list
+                    // keeps a fixed height, so the other days stay one scroll away.
+                    GeometryReader { geometry in
+                        ViewThatFits(in: .vertical) {
+                            dayList(fileListHeight: nil)
+                            ScrollViewReader { proxy in
+                                ScrollView {
+                                    dayList(fileListHeight: max(FileList.minHeight, geometry.size.height * 0.6))
+                                }
+                                .onChange(of: model.expandedDayID) { _, id in
+                                    guard let id else { return }
+                                    withAnimation { proxy.scrollTo(id, anchor: .top) }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             .padding(.horizontal, 22)
@@ -132,7 +148,9 @@ struct ReviewView: View {
 
     // MARK: Day list
 
-    private var dayList: some View {
+    /// - Parameter fileListHeight: a fixed height for the open day's files; `nil` lets them
+    ///   take the space left under the other days.
+    private func dayList(fileListHeight: CGFloat?) -> some View {
         VStack(spacing: 0) {
             ForEach(Array(model.orderedDays.enumerated()), id: \.element.id) { index, day in
                 let isSettled = model.isBackedUpOnly(day)
@@ -162,10 +180,11 @@ struct ReviewView: View {
                     }
                     if isExpanded {
                         Divider()
-                        FileList(model: model, day: day)
+                        FileList(model: model, day: day, height: fileListHeight)
                     }
                 }
                 .frame(maxHeight: isExpanded ? .infinity : nil)
+                .id(day.id)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -330,6 +349,10 @@ private struct KindCounts: View {
 private struct FileList: View {
     @Bindable var model: BackupModel
     let day: ReviewDay
+    /// Fixed height, or `nil` to fill what the day list leaves.
+    var height: CGFloat?
+
+    static let minHeight: CGFloat = 200
 
     var body: some View {
         ScrollView {
@@ -348,7 +371,12 @@ private struct FileList: View {
             .padding(.horizontal, 14)
             .padding(.bottom, 8)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(
+            maxWidth: .infinity,
+            minHeight: height ?? Self.minHeight,
+            idealHeight: height ?? Self.minHeight,
+            maxHeight: height ?? .infinity
+        )
         .accessibilityLabel("Files from \(Format.day(day.day))")
     }
 }
