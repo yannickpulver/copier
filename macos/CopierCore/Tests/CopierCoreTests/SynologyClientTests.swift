@@ -34,7 +34,8 @@ final class CannedTransport: SynologyTransport, @unchecked Sendable {
         let folder = items.first { $0.name == "folder_path" }?.value ?? ""
         let offset = Int(items.first { $0.name == "offset" }?.value ?? "0") ?? 0
         let limit = Int(items.first { $0.name == "limit" }?.value ?? "0") ?? 0
-        requestedFolders.append("\(folder)@\(offset)")
+        let dirsOnly = items.contains { $0.name == "filetype" && $0.value == "dir" }
+        requestedFolders.append("\(folder)@\(offset)\(dirsOnly ? "[dirs]" : "")")
 
         guard let pages = responses[folder] else { return Self.emptyPage }
         let page = offset / max(limit, 1)
@@ -44,10 +45,10 @@ final class CannedTransport: SynologyTransport, @unchecked Sendable {
     static let failure = Data(#"{"success":false,"error":{"code":119}}"#.utf8)
     static let emptyPage = Data(#"{"success":true,"data":{"files":[]}}"#.utf8)
 
-    static func page(files: [(String, Int, Bool)], folder: String) -> Data {
+    static func page(files: [(String, Int, Bool)], folder: String, mtime: Int = 0) -> Data {
         let entries = files.map { name, size, isDirectory in
             """
-            {"name":"\(name)","path":"\(folder)/\(name)","isdir":\(isDirectory),"additional":{"size":\(size)}}
+            {"name":"\(name)","path":"\(folder)/\(name)","isdir":\(isDirectory),"additional":{"size":\(size),"time":{"mtime":\(mtime)}}}
             """
         }
         return Data(#"{"success":true,"data":{"files":[\#(entries.joined(separator: ","))]}}"#.utf8)
@@ -134,5 +135,27 @@ struct SynologyClientTests {
         let index = try await client.index(folders: ["/photo"])
         #expect(index.count == 1)
         #expect(index.folders(for: FileKey(name: "a.jpg", size: 1))?.first?.path == "/photo/zz")
+    }
+
+    @Test("an unchanged folder is not listed again, only its subfolders are fetched")
+    func cachedFolder() async throws {
+        let directory = try TempDirectory()
+        let cacheFile = directory.url.appendingPathComponent("cache.json")
+        let shoot = CannedTransport.page(files: [("a.jpg", 1, false)], folder: "/photo/2026.09.18", mtime: 100)
+        let transport = CannedTransport(responses: [
+            "/photo": [CannedTransport.page(files: [("2026.09.18", 0, true)], folder: "/photo", mtime: 100)],
+            "/photo/2026.09.18": [shoot],
+        ])
+        let client = SynologyClient(config: config, transport: transport)
+        try await client.login()
+
+        _ = try await client.index(folders: ["/photo"], cacheFile: cacheFile)
+        let index = try await client.index(folders: ["/photo"], cacheFile: cacheFile)
+
+        #expect(index.folders(for: FileKey(name: "a.jpg", size: 1))?.first?.path == "/photo/2026.09.18")
+        #expect(transport.requestedFolders == [
+            "/photo@0", "/photo/2026.09.18@0",
+            "/photo@0", "/photo/2026.09.18@0[dirs]",
+        ])
     }
 }

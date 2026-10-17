@@ -23,8 +23,13 @@ public protocol BackupIndexSource: Sendable {
 /// A local path source.
 public struct LocalPathSource: BackupIndexSource {
     public let path: CheckPath
+    /// Where the folder cache lives; `nil` reads every folder on every scan.
+    public let cacheFile: URL?
 
-    public init(_ path: CheckPath) { self.path = path }
+    public init(_ path: CheckPath, cacheFile: URL? = nil) {
+        self.path = path
+        self.cacheFile = cacheFile
+    }
 
     public var name: String { path.label }
     public var kind: SourceKind { .local }
@@ -48,7 +53,7 @@ public struct LocalPathSource: BackupIndexSource {
         guard FileManager.default.isReadableFile(atPath: root.path) else {
             throw BackupError.sourceUnavailable(name: path.label, reason: "\(path.path) is not readable")
         }
-        return await Matcher.indexLocalPath(root, targetKeys: targetKeys, progress: progress)
+        return await Matcher.indexLocalPath(root, targetKeys: targetKeys, cacheFile: cacheFile, progress: progress)
     }
 }
 
@@ -57,11 +62,13 @@ public struct SynologySource: BackupIndexSource {
     public let name: String
     private let client: SynologyClient
     private let folders: [String]
+    private let cacheFile: URL?
 
-    public init(name: String = "Synology API", client: SynologyClient, folders: [String]) {
+    public init(name: String = "Synology API", client: SynologyClient, folders: [String], cacheFile: URL? = nil) {
         self.name = name
         self.client = client
         self.folders = folders
+        self.cacheFile = cacheFile
     }
 
     public var kind: SourceKind { .api }
@@ -72,7 +79,7 @@ public struct SynologySource: BackupIndexSource {
         progress: (@Sendable (ScanProgress) -> Void)?
     ) async throws -> LocationIndex {
         try await client.login()
-        return try await client.index(folders: folders, targetKeys: targetKeys, progress: progress)
+        return try await client.index(folders: folders, targetKeys: targetKeys, cacheFile: cacheFile, progress: progress)
     }
 }
 
