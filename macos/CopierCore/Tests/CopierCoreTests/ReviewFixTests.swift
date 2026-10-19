@@ -11,7 +11,7 @@ struct LocalPathSourceTests {
     func missingPathThrows() async throws {
         let source = LocalPathSource(CheckPath(path: "/Volumes/Definitely Not Mounted \(UUID().uuidString)"))
         await #expect(throws: BackupError.self) {
-            _ = try await source.index(targetKeys: [], progress: nil)
+            _ = try await source.index(targetKeys: [], notBefore: nil, progress: nil)
         }
     }
 
@@ -23,7 +23,7 @@ struct LocalPathSourceTests {
 
         let source = LocalPathSource(CheckPath(path: file.path))
         await #expect(throws: BackupError.self) {
-            _ = try await source.index(targetKeys: [], progress: nil)
+            _ = try await source.index(targetKeys: [], notBefore: nil, progress: nil)
         }
     }
 
@@ -50,7 +50,7 @@ struct LocalPathSourceTests {
         try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
         try "photo".write(to: library.appendingPathComponent("IMG_1.JPG"), atomically: true, encoding: .utf8)
 
-        let index = try await LocalPathSource(CheckPath(path: library.path)).index(targetKeys: [], progress: nil)
+        let index = try await LocalPathSource(CheckPath(path: library.path)).index(targetKeys: [], notBefore: nil, progress: nil)
         #expect(index.count == 1)
     }
 }

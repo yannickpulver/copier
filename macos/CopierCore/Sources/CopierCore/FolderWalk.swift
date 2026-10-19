@@ -88,11 +88,14 @@ public enum FolderWalk {
     /// - Parameters:
     ///   - roots: the folders to walk. They are always read, never taken from the cache.
     ///   - targetKeys: the walk stops early once every key has been found.
+    ///   - notBefore: subfolders named for a day or year before this date are skipped
+    ///     (see ``Matcher/folderDay(_:)``). Folders without a date are always walked.
     ///   - cacheFile: where the cache is loaded from and saved to; `nil` disables caching.
     public static func index(
         roots: [String],
         browser: any FolderBrowser,
         targetKeys: Set<FileKey>? = nil,
+        notBefore: Date? = nil,
         cacheFile: URL? = nil,
         progress: (@Sendable (ScanProgress) -> Void)? = nil
     ) async throws -> LocationIndex {
@@ -101,6 +104,8 @@ public enum FolderWalk {
         var index = LocationIndex()
         var remaining = targetKeys
         var stoppedEarly = false
+        let cutoff = notBefore.map(day)
+        var skipped: Set<String> = []
 
         var stack = roots.reversed().map { Subfolder(path: $0, modified: nil) }
         while let folder = stack.popLast() {
@@ -139,14 +144,43 @@ public enum FolderWalk {
                 break
             }
 
+            let walked = subfolders.filter {
+                guard let cutoff, let day = Matcher.folderDay(($0.path as NSString).lastPathComponent), day < cutoff
+                else { return true }
+                skipped.insert($0.path)
+                return false
+            }
             // Ascending push, popLast takes from the end — newest (date-named) folders first.
-            stack.append(contentsOf: subfolders.sorted { $0.path < $1.path })
+            stack.append(contentsOf: walked.sorted { $0.path < $1.path })
         }
 
         if let cacheFile {
-            // A full walk saw every folder that still exists; an early stop keeps the rest.
+            // A full walk saw every folder that still exists, except inside skipped
+            // folders; an early stop keeps the rest.
+            if !stoppedEarly {
+                for (path, entry) in cache.folders where isInside(path, skipped) {
+                    visited.folders[path] = entry
+                }
+            }
             try? (stoppedEarly ? cache : visited).save(to: cacheFile)
         }
         return index
+    }
+
+    /// `yyyymmdd` of a date in the current calendar, comparable with ``Matcher/folderDay(_:)``.
+    private static func day(_ date: Date) -> Int {
+        let parts = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        return (parts.year ?? 0) * 10_000 + (parts.month ?? 0) * 100 + (parts.day ?? 0)
+    }
+
+    /// `true` when `path` is one of `folders` or lies inside one of them.
+    private static func isInside(_ path: String, _ folders: Set<String>) -> Bool {
+        guard !folders.isEmpty else { return false }
+        var current = path
+        while current.count > 1 {
+            if folders.contains(current) { return true }
+            current = (current as NSString).deletingLastPathComponent
+        }
+        return false
     }
 }

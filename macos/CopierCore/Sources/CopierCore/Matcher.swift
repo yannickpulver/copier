@@ -92,10 +92,12 @@ public enum Matcher {
     /// Index a local (or SMB-mounted) path.
     ///
     /// Newest folders are visited first, and the walk stops early once every key in
-    /// `targetKeys` has been found. With a `cacheFile`, unchanged folders are not read again.
+    /// `targetKeys` has been found. Folders dated before `notBefore` are skipped. With a
+    /// `cacheFile`, unchanged folders are not read again.
     public static func indexLocalPath(
         _ root: URL,
         targetKeys: Set<FileKey>? = nil,
+        notBefore: Date? = nil,
         cacheFile: URL? = nil,
         progress: (@Sendable (ScanProgress) -> Void)? = nil
     ) async -> LocationIndex {
@@ -103,6 +105,7 @@ public enum Matcher {
             roots: [root.path],
             browser: LocalFolderBrowser(),
             targetKeys: targetKeys,
+            notBefore: notBefore,
             cacheFile: cacheFile,
             progress: progress
         )) ?? LocationIndex()
@@ -229,6 +232,20 @@ public enum Matcher {
         let separators: Set<Character> = [".", "-"]
         return digits(0..<4) && separators.contains(chars[4]) && digits(5..<7)
             && separators.contains(chars[7]) && digits(8..<10)
+    }
+
+    /// The day a folder is named for, as `yyyymmdd`: names starting with `YYYY.MM.DD` or
+    /// `YYYY-MM-DD`, and bare year folders (`2025`), which count as their last day.
+    /// `nil` for every other name.
+    public static func folderDay(_ name: String) -> Int? {
+        let chars = Array(name)
+        func number(_ range: Range<Int>) -> Int? { Int(String(chars[range])) }
+        if chars.count == 4, let year = number(0..<4), (1900...2999).contains(year) {
+            return year * 10_000 + 1231
+        }
+        guard startsWithDate(name), let year = number(0..<4), let month = number(5..<7), let day = number(8..<10)
+        else { return nil }
+        return year * 10_000 + month * 100 + day
     }
 
     /// Folder names directly under `root`, ignoring dot-folders and system folders.

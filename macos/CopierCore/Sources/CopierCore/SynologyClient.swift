@@ -158,11 +158,12 @@ public actor SynologyClient {
     /// Index the configured folders.
     ///
     /// Folders are traversed newest-first (names sorted descending) and the walk
-    /// stops as soon as every key in `targetKeys` has been found. With a `cacheFile`,
-    /// unchanged folders are not read again.
+    /// stops as soon as every key in `targetKeys` has been found. Folders dated before
+    /// `notBefore` are skipped. With a `cacheFile`, unchanged folders are not read again.
     public func index(
         folders: [String],
         targetKeys: Set<FileKey>? = nil,
+        notBefore: Date? = nil,
         cacheFile: URL? = nil,
         progress: (@Sendable (ScanProgress) -> Void)? = nil
     ) async throws -> LocationIndex {
@@ -170,6 +171,7 @@ public actor SynologyClient {
             roots: folders,
             browser: self,
             targetKeys: targetKeys,
+            notBefore: notBefore,
             cacheFile: cacheFile,
             progress: progress
         )
