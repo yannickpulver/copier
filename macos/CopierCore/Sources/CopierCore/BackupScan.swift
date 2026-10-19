@@ -14,8 +14,10 @@ public protocol BackupIndexSource: Sendable {
     var kind: SourceKind { get }
     /// `true` for paths that are only scanned when the API failed.
     var isFallbackOnly: Bool { get }
+    /// - Parameter notBefore: folders named for an earlier day can be skipped.
     func index(
         targetKeys: Set<FileKey>,
+        notBefore: Date?,
         progress: (@Sendable (ScanProgress) -> Void)?
     ) async throws -> LocationIndex
 }
@@ -40,6 +42,7 @@ public struct LocalPathSource: BackupIndexSource {
     ///   loudly — an empty index would silently mark the whole card as new.
     public func index(
         targetKeys: Set<FileKey>,
+        notBefore: Date?,
         progress: (@Sendable (ScanProgress) -> Void)?
     ) async throws -> LocationIndex {
         let root = URL(fileURLWithPath: path.path)
@@ -53,7 +56,7 @@ public struct LocalPathSource: BackupIndexSource {
         guard FileManager.default.isReadableFile(atPath: root.path) else {
             throw BackupError.sourceUnavailable(name: path.label, reason: "\(path.path) is not readable")
         }
-        return await Matcher.indexLocalPath(root, targetKeys: targetKeys, cacheFile: cacheFile, progress: progress)
+        return await Matcher.indexLocalPath(root, targetKeys: targetKeys, notBefore: notBefore, cacheFile: cacheFile, progress: progress)
     }
 }
 
@@ -76,10 +79,11 @@ public struct SynologySource: BackupIndexSource {
 
     public func index(
         targetKeys: Set<FileKey>,
+        notBefore: Date?,
         progress: (@Sendable (ScanProgress) -> Void)?
     ) async throws -> LocationIndex {
         try await client.login()
-        return try await client.index(folders: folders, targetKeys: targetKeys, cacheFile: cacheFile, progress: progress)
+        return try await client.index(folders: folders, targetKeys: targetKeys, notBefore: notBefore, cacheFile: cacheFile, progress: progress)
     }
 }
 
@@ -186,17 +190,18 @@ public struct BackupScan: Sendable {
         }
 
         let targetKeys = Set(files.map(FileKey.init))
+        let notBefore = Self.notBefore(files)
         var results: [SourceResult] = []
 
         // API sources first — the fallback rule depends on whether they worked.
         for source in sources where source.kind == .api {
-            results.append(await run(source: source, targetKeys: targetKeys, progress: progress))
+            results.append(await run(source: source, targetKeys: targetKeys, notBefore: notBefore, progress: progress))
         }
         let apiSucceeded = results.contains { $0.kind == .api && $0.succeeded }
 
         for source in sources where source.kind != .api {
             if source.isFallbackOnly, apiSucceeded { continue }
-            results.append(await run(source: source, targetKeys: targetKeys, progress: progress))
+            results.append(await run(source: source, targetKeys: targetKeys, notBefore: notBefore, progress: progress))
         }
         if Task.isCancelled { throw BackupError.cancelled }
 
@@ -219,14 +224,25 @@ public struct BackupScan: Sendable {
         )
     }
 
+    /// How far a folder's date may lie before the card's oldest photo, e.g. a trip
+    /// folder named for its first day while the card starts on day five.
+    public static let folderDateSlack: TimeInterval = 30 * 24 * 60 * 60
+
+    /// The oldest media date on the card minus ``folderDateSlack``; `nil` without dates.
+    /// The minimum keeps this safe: a wrong camera clock only makes the window wider.
+    static func notBefore(_ files: [MediaFile]) -> Date? {
+        files.filter(\.isMedia).compactMap(\.modificationDate).min()?.addingTimeInterval(-folderDateSlack)
+    }
+
     private func run(
         source: any BackupIndexSource,
         targetKeys: Set<FileKey>,
+        notBefore: Date?,
         progress: (@Sendable (ScanEvent) -> Void)?
     ) async -> SourceResult {
         let name = source.name
         do {
-            let index = try await source.index(targetKeys: targetKeys) { step in
+            let index = try await source.index(targetKeys: targetKeys, notBefore: notBefore) { step in
                 progress?(ScanEvent(phase: .sources, count: step.count, detail: "\(name): \(step.folder)"))
             }
             return SourceResult(name: name, kind: source.kind, index: index, succeeded: true)

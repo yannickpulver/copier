@@ -88,6 +88,27 @@ struct MatcherTests {
         )
         #expect(Matcher.dateLevelFolder(URL(fileURLWithPath: "/nas/photo/misc")).path == "/nas/photo/misc")
     }
+
+    @Test("folder day reads dated and year folders, nothing else")
+    func folderDay() {
+        #expect(Matcher.folderDay("2026.01.02 - Trip") == 20260102)
+        #expect(Matcher.folderDay("2026-01-02") == 20260102)
+        #expect(Matcher.folderDay("2025") == 20251231)
+        #expect(Matcher.folderDay("0001") == nil)
+        #expect(Matcher.folderDay("02.01.2026 - Trip") == nil)
+        #expect(Matcher.folderDay("Exports") == nil)
+    }
+
+    @Test("notBefore is the oldest media date minus the slack")
+    func notBefore() {
+        func file(_ date: Date?, isMedia: Bool = true) -> MediaFile {
+            MediaFile(name: "x", url: URL(fileURLWithPath: "/x"), relativePath: "x", size: 1, modificationDate: date, isMedia: isMedia)
+        }
+        let oldest = Date(timeIntervalSince1970: 1_700_000_000)
+        let files = [file(oldest.addingTimeInterval(86_400)), file(oldest), file(nil), file(.distantPast, isMedia: false)]
+        #expect(BackupScan.notBefore(files) == oldest.addingTimeInterval(-BackupScan.folderDateSlack))
+        #expect(BackupScan.notBefore([file(nil)]) == nil)
+    }
 }
 
 @Suite("BackupScan source selection")
@@ -101,6 +122,7 @@ struct BackupScanSourceTests {
 
         func index(
             targetKeys: Set<FileKey>,
+            notBefore: Date?,
             progress: (@Sendable (ScanProgress) -> Void)?
         ) async throws -> LocationIndex {
             await recorder.record(name)

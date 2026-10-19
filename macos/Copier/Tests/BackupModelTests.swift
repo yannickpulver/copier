@@ -70,6 +70,7 @@ private struct EverythingBackedUp: BackupIndexSource {
 
     func index(
         targetKeys: Set<FileKey>,
+        notBefore: Date?,
         progress: (@Sendable (ScanProgress) -> Void)?
     ) async throws -> LocationIndex {
         var index = LocationIndex()
@@ -93,6 +94,7 @@ private struct FilesBackedUp: BackupIndexSource {
 
     func index(
         targetKeys: Set<FileKey>,
+        notBefore: Date?,
         progress: (@Sendable (ScanProgress) -> Void)?
     ) async throws -> LocationIndex {
         var index = LocationIndex()

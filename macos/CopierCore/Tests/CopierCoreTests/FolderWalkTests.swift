@@ -125,6 +125,53 @@ struct FolderWalkTests {
         #expect(FolderCache.load(from: cacheFile).folders["/nas/2026.01.01/Sony"] != nil)
     }
 
+    private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
+        Calendar.current.date(from: DateComponents(year: year, month: month, day: day))!
+    }
+
+    @Test("folders dated before notBefore are skipped, undated ones are walked")
+    func skipsOldDatedFolders() async throws {
+        let browser = makeBrowser()
+        browser.set("/nas/2025.12.31 - Party", .init(modified: day1, files: [FileKey(name: "old.jpg", size: 9)]))
+        browser.set("/nas/2024", .init(modified: day1, files: []))
+        browser.set("/nas/2024/2024-06-01", .init(modified: day1, files: []))
+        browser.set("/nas/Exports", .init(modified: day1, files: []))
+
+        let index = try await FolderWalk.index(roots: ["/nas"], browser: browser, notBefore: date(2026, 1, 1))
+
+        #expect(index.folders(for: a) != nil)
+        #expect(index.folders(for: FileKey(name: "old.jpg", size: 9)) == nil)
+        #expect(Set(browser.listed) == ["/nas", "/nas/2026.01.01", "/nas/2026.01.01/Sony", "/nas/Exports"])
+    }
+
+    @Test("a year folder is walked while any of its days is in range")
+    func yearFolderInRange() async throws {
+        let browser = FakeBrowser([
+            "/nas": .init(modified: day1, files: []),
+            "/nas/2025": .init(modified: day1, files: []),
+            "/nas/2025/2025.12.01": .init(modified: day1, files: [a]),
+            "/nas/2025/2025.06.01": .init(modified: day1, files: [b]),
+        ])
+        let index = try await FolderWalk.index(roots: ["/nas"], browser: browser, notBefore: date(2025, 11, 15))
+        #expect(index.folders(for: a) != nil)
+        #expect(index.folders(for: b) == nil)
+    }
+
+    @Test("a full walk keeps the cache of skipped folders")
+    func skippedFoldersStayCached() async throws {
+        let directory = try TempDirectory()
+        let cacheFile = directory.url.appendingPathComponent("cache.json")
+        let browser = makeBrowser()
+        browser.set("/nas/2020.01.01", .init(modified: day1, files: []))
+        browser.set("/nas/2020.01.01/Sony", .init(modified: day1, files: [FileKey(name: "old.jpg", size: 9)]))
+        _ = try await FolderWalk.index(roots: ["/nas"], browser: browser, cacheFile: cacheFile)
+
+        _ = try await FolderWalk.index(roots: ["/nas"], browser: browser, notBefore: date(2026, 1, 1), cacheFile: cacheFile)
+        let cache = FolderCache.load(from: cacheFile)
+        #expect(cache.folders["/nas/2020.01.01"] != nil)
+        #expect(cache.folders["/nas/2020.01.01/Sony"] != nil)
+    }
+
     @Test("modification dates survive a save and load unchanged")
     func roundTrip() throws {
         let directory = try TempDirectory()
