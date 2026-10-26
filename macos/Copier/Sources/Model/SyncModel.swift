@@ -35,9 +35,9 @@ final class SyncModel {
 
     private(set) var phase: Phase = .idle
 
-    var sources: [URL] {
+    /// Not persisted: every launch starts with no sources.
+    var sources: [URL] = [] {
         didSet {
-            settings.syncSources = sources.map(\.path)
             if oldValue != sources { resetResults() }
         }
     }
@@ -70,7 +70,6 @@ final class SyncModel {
 
     init(settings: SettingsStore = SettingsStore()) {
         self.settings = settings
-        sources = settings.syncSources.map { URL(fileURLWithPath: $0) }
         target = settings.syncTarget.map { URL(fileURLWithPath: $0) }
         appendSourceName = settings.syncAppendSourceName
     }
