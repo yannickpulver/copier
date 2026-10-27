@@ -39,25 +39,59 @@ struct ReviewDay: Identifiable, Sendable {
     let backedUpCount: Int
     /// Non-media files (sidecars and the like).
     let otherCount: Int
+    /// Where the backed-up files were found, most files first.
+    let places: [BackedUpPlace]
 
-    init(day: Day?, files: [ReviewFile]) {
+    init(day: Day?, files: [ReviewFile], places: [BackedUpPlace] = []) {
         self.day = day
         self.files = files
+        self.places = places
         clusters = TimeClustering.cluster(files)
         kindCounts = TimeClustering.kindCounts(files)
         backedUpCount = files.count { $0.reason == .backedUp }
         otherCount = files.count { $0.reason == .other }
     }
 
-    /// The note a fully backed-up day shows instead of a folder field.
+    /// The note a fully backed-up day shows instead of a folder field, with the place
+    /// most of it was found in.
     var backedUpNote: String {
-        if backedUpCount > 0, otherCount > 0 {
-            return "All \(backedUpCount) files backed up · \(otherCount) other"
+        guard backedUpCount > 0 else { return "\(otherCount) other file\(otherCount == 1 ? "" : "s")" }
+        var note = "All \(backedUpCount) file\(backedUpCount == 1 ? "" : "s") backed up"
+        if let place = places.first {
+            let folder = place.folder.lastPathComponent
+            // A dated check location is its own folder; naming it twice says nothing.
+            note += folder == place.location ? " in \(folder)" : " in \(place.location) › \(folder)"
+            if places.count > 1 { note += " +\(places.count - 1)" }
         }
-        if backedUpCount > 0 {
-            return "All \(backedUpCount) file\(backedUpCount == 1 ? "" : "s") backed up"
+        if otherCount > 0 { note += " · \(otherCount) other" }
+        return note
+    }
+
+    /// Every place with its full path, for the note's tooltip.
+    var placesDetail: String {
+        places.map { "\($0.location): \($0.folder.path) (\($0.count))" }.joined(separator: "\n")
+    }
+}
+
+/// A dated folder in a check location that holds some of a day's files.
+struct BackedUpPlace: Hashable, Sendable {
+    var location: String
+    var folder: URL
+    var count: Int
+
+    /// Count each file once per location and dated folder it was found in.
+    static func places(of files: [MediaFile], in sources: [SourceResult], names: [String: String]) -> [BackedUpPlace] {
+        var counts: [String: [URL: Int]] = [:]
+        for source in sources {
+            let location = names[source.name] ?? source.name
+            for file in files {
+                let folders = Set((source.index.folders(for: FileKey(file)) ?? []).map(Matcher.dateLevelFolder))
+                for folder in folders { counts[location, default: [:]][folder, default: 0] += 1 }
+            }
         }
-        return "\(otherCount) other file\(otherCount == 1 ? "" : "s")"
+        return counts
+            .flatMap { location, folders in folders.map { BackedUpPlace(location: location, folder: $0.key, count: $0.value) } }
+            .sorted { ($0.count, $1.location, $1.folder.path) > ($1.count, $0.location, $0.folder.path) }
     }
 }
 
@@ -561,8 +595,10 @@ final class BackupModel {
         for file in result.allFiles {
             allFiles.append(enriched[file.url] ?? file)
         }
+        DayGrouping.adoptSidecarDates(&allFiles)
         filesByURL = Dictionary(uniqueKeysWithValues: allFiles.map { ($0.url, $0) })
 
+        let names = Dictionary(locations.map { ($0.sourceName, $0.displayName) }, uniquingKeysWith: { first, _ in first })
         days = DayGrouping.group(allFiles).map { group in
             ReviewDay(
                 day: group.day,
@@ -576,7 +612,12 @@ final class BackupModel {
                         reason = .new
                     }
                     return ReviewFile(file: file, reason: reason)
-                }
+                },
+                places: BackedUpPlace.places(
+                    of: group.files.filter { backedUpURLs.contains($0.url) },
+                    in: result.sources,
+                    names: names
+                )
             )
         }
 
@@ -584,7 +625,8 @@ final class BackupModel {
         // Folders sorted on the card already say how the day splits.
         splitDayIDs = Set(days.filter { canSplit($0) && $0.clusters.contains { $0.title != nil } }.map(\.id))
         rebuildDayOrder()
-        expandedDayID = days.first(where: { !$0.newFiles.isEmpty })?.id ?? days.first?.id
+        // Nothing to copy, nothing to look at: a fully backed-up card opens collapsed.
+        expandedDayID = days.first(where: { !$0.newFiles.isEmpty })?.id
         rebuildTargets()
         autoEnableCameraSubfolders()
         phase = .review

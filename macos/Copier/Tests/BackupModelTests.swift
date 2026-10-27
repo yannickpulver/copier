@@ -342,6 +342,7 @@ struct BackupModelTests {
         #expect(model.tickedCount == 0)
         #expect(model.days.flatMap(\.files).allSatisfy { $0.reason != .new })
         #expect(model.reviewSubtitle.contains("backed up"))
+        #expect(model.expandedDayID == nil)
     }
 
     @Test("A backup copies the ticked files and finishes")
@@ -457,6 +458,35 @@ struct BackupModelTests {
         // A folder with exactly that name is already there, so the block goes into it.
         #expect(model.target(for: ShootKey(day: day.day, block: 1)) == .existing(existing))
         #expect(model.plan.folders.map(\.files.count) == [2, 2])
+    }
+
+    @Test("an XMP edited later stays with its photo in the card folder's folder")
+    func sidecarStaysWithPhoto() async throws {
+        let fixture = try Fixture(days: [("2026-09-18", [("IMG_0001.JPG", 1000), ("IMG_0002.JPG", 1000)])])
+        defer { fixture.remove() }
+        let camera = fixture.card.appendingPathComponent("DCIM/100TEST")
+        let sorted = fixture.card.appendingPathComponent("DCIM/100CANON/Isa & Spencer")
+        try FileManager.default.createDirectory(at: sorted, withIntermediateDirectories: true)
+        for name in ["IMG_0001.JPG", "IMG_0002.JPG"] {
+            try FileManager.default.moveItem(at: camera.appendingPathComponent(name), to: sorted.appendingPathComponent(name))
+        }
+        let xmp = sorted.appendingPathComponent("IMG_0001.xmp")
+        try Data("<x/>".utf8).write(to: xmp)
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        let edited = try #require(formatter.date(from: "2026-10-20 09:00"))
+        try FileManager.default.setAttributes([.modificationDate: edited], ofItemAtPath: xmp.path)
+
+        let model = makeModel(fixture)
+        await model.refreshCards()
+        model.startScan()
+        try await wait(for: model, until: isReview)
+
+        #expect(model.days.map(\.id) == ["2026-09-18"])
+        let day = try #require(model.days.first)
+        #expect(day.files.contains { $0.file.name == "IMG_0001.xmp" })
+        #expect(model.plan.folders.map(\.url.lastPathComponent) == ["2026.09.18 - Isa & Spencer"])
+        #expect(model.plan.folders.map(\.files.count) == [3])
     }
 
     @Test("splitting a day gives each time block its own folder, merging puts it back")
@@ -638,12 +668,37 @@ struct BackupModelTests {
         #expect(model.scan == nil)
     }
 
+    @Test("backed-up places rank by file count and use the pill's name")
+    func backedUpPlaces() {
+        let files = ["A.JPG", "B.JPG", "C.JPG"].map {
+            MediaFile(name: $0, url: URL(fileURLWithPath: "/card/\($0)"), relativePath: $0, size: 1, isMedia: true)
+        }
+        var nas = LocationIndex()
+        for file in files { nas.add(FileKey(file), folder: URL(fileURLWithPath: "/photo/2026/2026.09.18 - Trip/R5")) }
+        var ssd = LocationIndex()
+        ssd.add(FileKey(files[0]), folder: URL(fileURLWithPath: "/Volumes/SSD/2026.09.18 - Old"))
+        let places = BackedUpPlace.places(
+            of: files,
+            in: [
+                SourceResult(name: "Synology API", kind: .api, index: nas, succeeded: true),
+                SourceResult(name: "SSD", kind: .local, index: ssd, succeeded: true),
+            ],
+            names: ["Synology API": "nas.local"]
+        )
+        #expect(places.map(\.location) == ["nas.local", "SSD"])
+        #expect(places.map(\.folder.lastPathComponent) == ["2026.09.18 - Trip", "2026.09.18 - Old"])
+        #expect(places.map(\.count) == [3, 1])
+
+        let day = ReviewDay(day: nil, files: files.map { ReviewFile(file: $0, reason: .backedUp) }, places: places)
+        #expect(day.backedUpNote == "All 3 files backed up in nas.local › 2026.09.18 - Trip +1")
+    }
+
     @Test("days with nothing new are sorted into a second block, collapsed and unticked")
     func backedUpDaysSortLast() async throws {
         let fixture = try Fixture(days: Self.twoDays)
         defer { fixture.remove() }
         // The 18th is already on the "NAS", the 19th is not.
-        let library = fixture.root.appendingPathComponent("library")
+        let library = fixture.root.appendingPathComponent("library/2026.09.18 - Trip/X100VI")
         try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
         let source = FilesBackedUp(folder: library, names: ["IMG_0001.JPG", "IMG_0002.JPG"])
 
@@ -660,7 +715,8 @@ struct BackupModelTests {
         #expect(model.expandedDayID == "2026-09-19")
 
         let settled = try #require(model.orderedDays.last)
-        #expect(settled.backedUpNote == "All 2 files backed up · 1 other")
+        // Where: the location and the dated folder above the camera subfolder.
+        #expect(settled.backedUpNote == "All 2 files backed up in Fake NAS › 2026.09.18 - Trip · 1 other")
 
         // Ticking a file in a settled day moves it back into the first block.
         let file = try #require(settled.files.first { $0.reason == .backedUp })

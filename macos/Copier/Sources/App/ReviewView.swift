@@ -255,6 +255,7 @@ private struct DayHeaderRow: View {
                     .font(Theme.secondary)
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
+                    .help(day.placesDetail)
                 Spacer(minLength: 8)
             } else if model.structure == .folderPerDay {
                 if model.isSplit(day) {
