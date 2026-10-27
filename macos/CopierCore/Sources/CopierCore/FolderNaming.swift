@@ -1,10 +1,13 @@
 import Foundation
 
-/// Destination folder names: `<date> - <title>`, with the date rendered from a
+/// Destination folder names: `<date><separator><title>`, with the date rendered from a
 /// token format (`YYYY`, `YY`, `MM`, `DD`).
 public enum FolderNaming {
     /// The format used when the user has not picked one.
     public static let defaultDateFormat = "YYYY.MM.DD"
+
+    /// What goes between date and title when the user has not picked one.
+    public static let defaultSeparator = " - "
 
     /// Render a day with the token format. Unknown characters pass through.
     public static func formatDate(_ day: Day, format: String = defaultDateFormat) -> String {
@@ -21,10 +24,15 @@ public enum FolderNaming {
 
     /// Name for a folder: `2026.09.18 - Trip`, or just `2026.09.18` when the title is empty.
     /// A `nil` day (files without any date) renders as `unknown`.
-    public static func folderName(day: Day?, title: String, format: String = defaultDateFormat) -> String {
+    public static func folderName(
+        day: Day?,
+        title: String,
+        format: String = defaultDateFormat,
+        separator: String = defaultSeparator
+    ) -> String {
         let datePart = day.map { formatDate($0, format: format) } ?? "unknown"
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? datePart : "\(datePart) - \(trimmed)"
+        return trimmed.isEmpty ? datePart : "\(datePart)\(separator)\(trimmed)"
     }
 
     /// Folder names that already exist at `destination`, sorted, system folders excluded.

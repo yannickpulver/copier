@@ -139,7 +139,7 @@ private struct LocationsTab: View {
                 }
             }
 
-            Text("Folder names use \(model.dateFormat) - Topic. Change in Naming.")
+            Text("Folder names use \(model.dateFormat)\(model.folderSeparator)Topic. Change in Naming.")
                 .font(Theme.secondary)
                 .foregroundStyle(.secondary)
             }
@@ -436,6 +436,15 @@ private struct NamingTab: View {
                             .font(Theme.secondary)
                     }
                 }
+            }
+
+            Section("Between date and title") {
+                Picker("Separator", selection: $model.folderSeparator) {
+                    Text("Dash").tag(" - ")
+                    Text("Space").tag(" ")
+                    Text("Underscore").tag("_")
+                }
+                .pickerStyle(.segmented)
             }
 
             Section("Tokens") {

@@ -32,6 +32,13 @@ struct FolderNamingTests {
         #expect(FolderNaming.folderName(day: nil, title: "Trip") == "unknown - Trip")
     }
 
+    @Test("the separator goes between date and title only")
+    func separator() {
+        #expect(FolderNaming.folderName(day: day, title: "Trip", separator: " ") == "2026.09.18 Trip")
+        #expect(FolderNaming.folderName(day: day, title: "Trip", separator: "_") == "2026.09.18_Trip")
+        #expect(FolderNaming.folderName(day: day, title: "", separator: "_") == "2026.09.18")
+    }
+
     @Test("matching folders start with the formatted date")
     func matchingFolders() {
         let folders = ["2026.09.18 - Trip", "2026.09.18", "2026.09.19 - Other", "Misc"]

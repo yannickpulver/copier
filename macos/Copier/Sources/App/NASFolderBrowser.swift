@@ -54,9 +54,11 @@ struct NASFolderBrowser: View {
                 }
                 .padding(.vertical, 4)
             }
-            .frame(maxHeight: 280)
+            // A ScrollView has no ideal height, so in a popover it collapses unless
+            // given a real one.
+            .frame(height: 320)
         }
-        .frame(width: 380)
+        .frame(width: 420)
         .task { await loadRoot() }
     }
 

@@ -430,6 +430,35 @@ struct BackupModelTests {
         #expect(model.target(for: model.days[0]) == .new(title: "Trip"))
     }
 
+    @Test("a folder sorted on the card becomes its own block, named after it")
+    func cardFolderSplitsAndNames() async throws {
+        let fixture = try Fixture(days: [
+            ("2026-09-18", [("IMG_0001.JPG", 1000), ("IMG_0002.JPG", 1000), ("IMG_0003.JPG", 1000), ("IMG_0004.JPG", 1000)]),
+        ])
+        defer { fixture.remove() }
+        // Minutes apart, so only the folder tells the two shoots apart.
+        let camera = fixture.card.appendingPathComponent("DCIM/100TEST")
+        let sorted = fixture.card.appendingPathComponent("DCIM/100CANON/Isa & Spencer")
+        try FileManager.default.createDirectory(at: sorted, withIntermediateDirectories: true)
+        for name in ["IMG_0003.JPG", "IMG_0004.JPG"] {
+            try FileManager.default.moveItem(at: camera.appendingPathComponent(name), to: sorted.appendingPathComponent(name))
+        }
+        let existing = fixture.destination.appendingPathComponent("2026.09.18 - Isa & Spencer")
+        try FileManager.default.createDirectory(at: existing, withIntermediateDirectories: true)
+
+        let model = makeModel(fixture)
+        await model.refreshCards()
+        model.startScan()
+        try await wait(for: model, until: isReview)
+
+        let day = try #require(model.days.first)
+        #expect(model.isSplit(day))
+        #expect(model.target(for: ShootKey(day: day.day, block: 0)) == .new(title: ""))
+        // A folder with exactly that name is already there, so the block goes into it.
+        #expect(model.target(for: ShootKey(day: day.day, block: 1)) == .existing(existing))
+        #expect(model.plan.folders.map(\.files.count) == [2, 2])
+    }
+
     @Test("splitting a day gives each time block its own folder, merging puts it back")
     func splitAndMergeDay() async throws {
         let fixture = try Fixture(days: [

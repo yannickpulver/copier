@@ -18,6 +18,7 @@ public final class SettingsStore: @unchecked Sendable {
         public static let synologySecure = "copier.synologySecure"
         public static let synologyFolders = "copier.synologyFolders"
         public static let dateFormat = "copier.dateFormat"
+        public static let folderSeparator = "copier.folderSeparator"
         public static let syncTarget = "copier.syncTarget"
         public static let syncAppendSourceName = "copier.syncAppendSourceName"
         public static let cameraSubfolders = "copier.cameraSubfolders"
@@ -105,6 +106,12 @@ public final class SettingsStore: @unchecked Sendable {
         set { defaults.set(newValue, forKey: Key.dateFormat) }
     }
 
+    /// What goes between date and title, defaults to ` - `. Empty is a valid choice.
+    public var folderSeparator: String {
+        get { defaults.string(forKey: Key.folderSeparator) ?? FolderNaming.defaultSeparator }
+        set { defaults.set(newValue, forKey: Key.folderSeparator) }
+    }
+
     /// Whether files go into a `<camera>` subfolder.
     public var cameraSubfolders: Bool {
         get { defaults.bool(forKey: Key.cameraSubfolders) }
@@ -135,7 +142,7 @@ public final class SettingsStore: @unchecked Sendable {
         let keys = [
             Key.checkPaths, Key.transferDestinations, Key.selectedDestination,
             Key.synologyHost, Key.synologyPort, Key.synologyUser, Key.synologyPassword,
-            Key.synologySecure, Key.synologyFolders, Key.dateFormat,
+            Key.synologySecure, Key.synologyFolders, Key.dateFormat, Key.folderSeparator,
             Key.syncTarget, Key.syncAppendSourceName, Key.cameraSubfolders, Key.structure,
         ]
         for key in keys { defaults.removeObject(forKey: key) }

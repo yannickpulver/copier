@@ -81,6 +81,7 @@ public enum TransferPlanner {
     ///   - destination: the destination root a new folder is created in.
     ///   - cameraSubfolders: when `true`, files go to `<folder>/<camera ?? "Unknown">/`.
     ///   - dateFormat: token format for the date prefix of new folders.
+    ///   - separator: what goes between date and title of new folders.
     public static func plan(
         files: [MediaFile],
         structure: Structure,
@@ -88,6 +89,7 @@ public enum TransferPlanner {
         destination: URL,
         cameraSubfolders: Bool = false,
         dateFormat: String = FolderNaming.defaultDateFormat,
+        separator: String = FolderNaming.defaultSeparator,
         calendar: Calendar = .current
     ) -> TransferPlan {
         let groups = DayGrouping.group(files, calendar: calendar)
@@ -97,7 +99,8 @@ public enum TransferPlanner {
                 groups: groups.map { PlanGroup(day: $0.day, target: targets[$0.day] ?? .new(title: ""), files: $0.files) },
                 destination: destination,
                 cameraSubfolders: cameraSubfolders,
-                dateFormat: dateFormat
+                dateFormat: dateFormat,
+                separator: separator
             )
         case .oneFolder:
             let firstDay = groups.first?.day
@@ -106,7 +109,8 @@ public enum TransferPlanner {
                 groups: [PlanGroup(day: firstDay, target: target, files: groups.flatMap(\.files))],
                 destination: destination,
                 cameraSubfolders: cameraSubfolders,
-                dateFormat: dateFormat
+                dateFormat: dateFormat,
+                separator: separator
             )
         }
     }
@@ -118,11 +122,12 @@ public enum TransferPlanner {
         groups: [PlanGroup],
         destination: URL,
         cameraSubfolders: Bool = false,
-        dateFormat: String = FolderNaming.defaultDateFormat
+        dateFormat: String = FolderNaming.defaultDateFormat,
+        separator: String = FolderNaming.defaultSeparator
     ) -> TransferPlan {
         var folders: [PlannedFolder] = []
         for group in groups where !group.files.isEmpty {
-            let planned = folder(for: group.day, target: group.target, files: group.files, destination: destination, dateFormat: dateFormat)
+            let planned = folder(for: group.day, target: group.target, files: group.files, destination: destination, dateFormat: dateFormat, separator: separator)
             if let index = folders.firstIndex(where: { $0.url.path == planned.url.path }) {
                 folders[index].files += planned.files
                 folders[index].isNew = folders[index].isNew && planned.isNew
@@ -155,11 +160,12 @@ public enum TransferPlanner {
         target: FolderTarget,
         files: [MediaFile],
         destination: URL,
-        dateFormat: String
+        dateFormat: String,
+        separator: String
     ) -> PlannedFolder {
         switch target {
         case let .new(title):
-            let name = FolderNaming.folderName(day: day, title: title, format: dateFormat)
+            let name = FolderNaming.folderName(day: day, title: title, format: dateFormat, separator: separator)
             return PlannedFolder(day: day, url: destination.appendingPathComponent(name), isNew: true, files: files)
         case let .existing(url):
             return PlannedFolder(day: day, url: url, isNew: false, files: files)
