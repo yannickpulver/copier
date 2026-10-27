@@ -625,7 +625,8 @@ final class BackupModel {
         // Folders sorted on the card already say how the day splits.
         splitDayIDs = Set(days.filter { canSplit($0) && $0.clusters.contains { $0.title != nil } }.map(\.id))
         rebuildDayOrder()
-        expandedDayID = days.first(where: { !$0.newFiles.isEmpty })?.id ?? days.first?.id
+        // Nothing to copy, nothing to look at: a fully backed-up card opens collapsed.
+        expandedDayID = days.first(where: { !$0.newFiles.isEmpty })?.id
         rebuildTargets()
         autoEnableCameraSubfolders()
         phase = .review

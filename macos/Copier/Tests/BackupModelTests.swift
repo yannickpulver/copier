@@ -342,6 +342,7 @@ struct BackupModelTests {
         #expect(model.tickedCount == 0)
         #expect(model.days.flatMap(\.files).allSatisfy { $0.reason != .new })
         #expect(model.reviewSubtitle.contains("backed up"))
+        #expect(model.expandedDayID == nil)
     }
 
     @Test("A backup copies the ticked files and finishes")
