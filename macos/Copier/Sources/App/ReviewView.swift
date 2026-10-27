@@ -214,6 +214,15 @@ private struct DayHeaderRow: View {
             .toggleStyle(.checkbox)
             .accessibilityLabel("Include \(Format.day(day.day))")
 
+            if !isShowingBlocks {
+                HStack(spacing: 3) {
+                    ForEach(day.clusters) { cluster in
+                        if let file = cluster.previewFile { Thumbnail(file: file) }
+                    }
+                }
+                .opacity(isSettled ? 0.55 : 1)
+            }
+
             Button {
                 model.expandedDayID = isExpanded ? nil : day.id
             } label: {
@@ -292,6 +301,11 @@ private struct DayHeaderRow: View {
         .padding(.vertical, 9)
         .background(isSettled ? AnyShapeStyle(.clear) : AnyShapeStyle(Color.accentColor.opacity(0.07)))
     }
+
+    /// A split day lists its blocks below, each with its own thumbnail.
+    private var isShowingBlocks: Bool {
+        model.isSplit(day) && !isSettled && model.structure == .folderPerDay
+    }
 }
 
 /// One time block of a split day: its time span and its own folder field.
@@ -303,6 +317,7 @@ private struct BlockRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
+            if let file = cluster.previewFile { Thumbnail(file: file) }
             Text(Format.span(from: cluster.start, to: cluster.end))
                 .font(Theme.secondary)
                 .foregroundStyle(.secondary)
@@ -398,6 +413,12 @@ private struct ClusterHeader: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
+            if let title = cluster.title {
+                Label(title, systemImage: "folder")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
             Spacer(minLength: 0)
         }
         .padding(.top, 8)

@@ -29,6 +29,17 @@ enum FileKind: String, Sendable, CaseIterable {
 }
 
 extension MediaFile {
+    /// The name of a folder the user made inside a camera folder on the card, as in
+    /// `DCIM/100CANON/Isa & Spencer/IMG_0001.CR3`. Camera folders (`100CANON`,
+    /// `100_0001`) follow the DCF pattern of three digits and five characters.
+    var cardFolderTitle: String? {
+        let folders = (relativePath as NSString).pathComponents.dropLast()
+        guard let camera = folders.firstIndex(where: { $0.wholeMatch(of: /\d{3}\w{5}/) != nil }),
+              camera + 1 < folders.endIndex
+        else { return nil }
+        return folders[camera + 1]
+    }
+
     var kind: FileKind {
         let ext = fileExtension
         if MediaExtensions.raw.contains(ext) { return .raw }
@@ -44,9 +55,20 @@ struct FileCluster: Identifiable, Sendable {
     var files: [ReviewFile]
     var start: Date?
     var end: Date?
+    /// The card folder the files came from, when the user already sorted them there.
+    var title: String?
 
     var id: String {
-        (start?.timeIntervalSince1970).map { "\($0)" } ?? "undated-\(files.first?.file.name ?? "")"
+        let time = (start?.timeIntervalSince1970).map { "\($0)" } ?? "undated-\(files.first?.file.name ?? "")"
+        return title.map { "\($0)-\(time)" } ?? time
+    }
+
+    /// The file whose thumbnail stands for the cluster: the middle photo, or the middle
+    /// video when there are no photos.
+    var previewFile: MediaFile? {
+        let photos = files.map(\.file).filter { $0.kind == .photo || $0.kind == .raw }
+        let candidates = photos.isEmpty ? files.map(\.file).filter { $0.kind == .video } : photos
+        return candidates.isEmpty ? nil : candidates[candidates.count / 2]
     }
 }
 
@@ -55,9 +77,33 @@ enum TimeClustering {
     /// A gap this long starts a new cluster.
     static let defaultGap: TimeInterval = 30 * 60
 
-    /// Cluster `files` (already in capture order). Files without any date end up in a
-    /// single trailing cluster.
+    /// Cluster `files` (already in capture order). Each card folder the user made is one
+    /// cluster of its own; the rest is split on time gaps.
     static func cluster(_ files: [ReviewFile], gap: TimeInterval = defaultGap) -> [FileCluster] {
+        var titles: [String] = []
+        var byTitle: [String: [ReviewFile]] = [:]
+        var loose: [ReviewFile] = []
+        for file in files {
+            guard let title = file.file.cardFolderTitle else {
+                loose.append(file)
+                continue
+            }
+            if byTitle[title] == nil { titles.append(title) }
+            byTitle[title, default: []].append(file)
+        }
+        guard !titles.isEmpty else { return cluster(byTime: files, gap: gap) }
+
+        let named = titles.map { title in
+            let dates = byTitle[title, default: []].compactMap { $0.file.captureDate ?? $0.file.modificationDate }
+            return FileCluster(files: byTitle[title, default: []], start: dates.first, end: dates.last, title: title)
+        }
+        // Undated clusters stay last, as in the time-only split.
+        return (cluster(byTime: loose, gap: gap) + named)
+            .sorted { ($0.start ?? .distantFuture) < ($1.start ?? .distantFuture) }
+    }
+
+    /// Files without any date end up in a single trailing cluster.
+    private static func cluster(byTime files: [ReviewFile], gap: TimeInterval) -> [FileCluster] {
         var clusters: [FileCluster] = []
         var current: [ReviewFile] = []
         var currentStart: Date?

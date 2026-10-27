@@ -332,7 +332,8 @@ final class BackupModel {
             groups: planGroups,
             destination: destination,
             cameraSubfolders: cameraSubfolders,
-            dateFormat: dependencies.settings.dateFormat
+            dateFormat: dependencies.settings.dateFormat,
+            separator: dependencies.settings.folderSeparator
         )
     }
 
@@ -359,16 +360,23 @@ final class BackupModel {
     func folderName(for day: Day?, target: FolderTarget) -> String {
         switch target {
         case let .new(title):
-            return FolderNaming.folderName(day: day, title: title, format: dependencies.settings.dateFormat)
+            return FolderNaming.folderName(
+                day: day,
+                title: title,
+                format: dependencies.settings.dateFormat,
+                separator: dependencies.settings.folderSeparator
+            )
         case let .existing(url):
             return url.lastPathComponent
         }
     }
 
-    /// The fixed `2026.09.18 -` prefix of a new folder.
+    /// The fixed `2026.09.18 -` prefix of a new folder; a trailing space would only
+    /// add to the field's own gap.
     func datePrefix(for day: Day?) -> String {
-        guard let day else { return "unknown -" }
-        return FolderNaming.formatDate(day, format: dependencies.settings.dateFormat) + " -"
+        let date = day.map { FolderNaming.formatDate($0, format: dependencies.settings.dateFormat) } ?? "unknown"
+        let prefix = date + dependencies.settings.folderSeparator
+        return prefix.hasSuffix(" ") ? String(prefix.dropLast()) : prefix
     }
 
     // MARK: - Cards
@@ -573,6 +581,8 @@ final class BackupModel {
         }
 
         ticked = Set(days.flatMap(\.newFiles).map(\.id))
+        // Folders sorted on the card already say how the day splits.
+        splitDayIDs = Set(days.filter { canSplit($0) && $0.clusters.contains { $0.title != nil } }.map(\.id))
         rebuildDayOrder()
         expandedDayID = days.first(where: { !$0.newFiles.isEmpty })?.id ?? days.first?.id
         rebuildTargets()
@@ -580,21 +590,28 @@ final class BackupModel {
         phase = .review
     }
 
-    /// Preselect an existing folder per day when one with the same date exists.
-    /// A title the user already typed is kept — switching the destination must not wipe it.
+    /// Name each folder after its card folder, or preselect an existing folder per day
+    /// when one with the same date exists. A title the user already typed is kept —
+    /// switching the destination must not wipe it.
     private func rebuildTargets() {
-        guard let destination else {
-            targets = [:]
-            return
-        }
         let format = dependencies.settings.dateFormat
         var next: [ShootKey: FolderTarget] = [:]
         for group in days {
+            // Folders named after a card folder belong to that block, not the day's first.
+            let claimed = Set(group.clusters.compactMap(\.title).map { folderName(for: group.day, target: .new(title: $0)) })
+            let sameDay = existingFolderNames.filter { !claimed.contains($0) }
             for key in shootKeys(for: group) {
                 if let typed = targets[key], Self.hasTypedTitle(typed) {
                     next[key] = typed
-                } else if let day = key.day, (key.block ?? 0) == 0,
-                          let match = FolderNaming.preselectedFolder(in: existingFolderNames, for: day, format: format) {
+                } else if let title = cardFolderTitle(for: key, in: group) {
+                    let name = folderName(for: key.day, target: .new(title: title))
+                    if let destination, existingFolderNames.contains(name) {
+                        next[key] = .existing(destination.appending(path: name, directoryHint: .notDirectory))
+                    } else {
+                        next[key] = .new(title: title)
+                    }
+                } else if let destination, let day = key.day, (key.block ?? 0) == 0,
+                          let match = FolderNaming.preselectedFolder(in: sameDay, for: day, format: format) {
                     // Only the whole day, or the first block of a split one, picks up the same-day folder.
                     next[key] = .existing(destination.appending(path: match, directoryHint: .notDirectory))
                 } else {
@@ -606,6 +623,14 @@ final class BackupModel {
         if !Self.hasTypedTitle(oneFolderTarget) {
             oneFolderTarget = next[ShootKey(day: oneFolderDay)] ?? .new(title: "")
         }
+    }
+
+    /// The card folder a block came from; a whole day only has one when all of it did.
+    private func cardFolderTitle(for key: ShootKey, in day: ReviewDay) -> String? {
+        guard let block = key.block else {
+            return day.clusters.count == 1 ? day.clusters[0].title : nil
+        }
+        return day.clusters.indices.contains(block) ? day.clusters[block].title : nil
     }
 
     private static func hasTypedTitle(_ target: FolderTarget) -> Bool {
@@ -681,14 +706,16 @@ final class BackupModel {
     }
 
     /// Give each time block of `day` its own folder. The first block keeps the day's
-    /// current choice, the others start as new, untitled folders.
+    /// current choice, the others start as new folders named after their card folder.
     func split(_ day: ReviewDay) {
         guard canSplit(day), !isSplit(day) else { return }
         let whole = ShootKey(day: day.day)
         let current = targets[whole] ?? .new(title: "")
         targets[whole] = nil
         for block in day.clusters.indices {
-            targets[ShootKey(day: day.day, block: block)] = block == 0 ? current : .new(title: "")
+            targets[ShootKey(day: day.day, block: block)] = block == 0
+                ? current
+                : .new(title: day.clusters[block].title ?? "")
         }
         splitDayIDs.insert(day.id)
         shortfall = nil

@@ -65,6 +65,10 @@ final class SettingsModel {
         didSet { store.dateFormat = dateFormat }
     }
 
+    var folderSeparator: String {
+        didSet { store.folderSeparator = folderSeparator }
+    }
+
     private(set) var connection: ConnectionState = .idle
     /// Bumped whenever something the check-location pills show has changed.
     private(set) var locationsRevision = 0
@@ -85,6 +89,7 @@ final class SettingsModel {
         synologyFolders = store.synologyFolders
         synologyPassword = store.synologyPassword ?? keychain.synologyPassword ?? ""
         dateFormat = store.dateFormat
+        folderSeparator = store.folderSeparator
     }
 
     private func storePassword(_ value: String) {
@@ -99,7 +104,7 @@ final class SettingsModel {
 
     /// Live preview of the folder name for today's date.
     var dateFormatPreview: String {
-        FolderNaming.folderName(day: Day(date: Date()), title: "Topic", format: dateFormat)
+        FolderNaming.folderName(day: Day(date: Date()), title: "Topic", format: dateFormat, separator: folderSeparator)
     }
 
     // MARK: Editing

@@ -143,6 +143,7 @@ struct SettingsStoreTests {
         #expect(store.synologySecure)
         #expect(store.synologyFolders.isEmpty)
         #expect(store.dateFormat == "YYYY.MM.DD")
+        #expect(store.folderSeparator == " - ")
         #expect(store.structure == .folderPerDay)
         #expect(store.cameraSubfolders == false)
         #expect(store.syncAppendSourceName == false)
@@ -161,6 +162,7 @@ struct SettingsStoreTests {
         store.synologySecure = false
         store.synologyFolders = ["/photo", "/video"]
         store.dateFormat = "YY-MM-DD"
+        store.folderSeparator = ""
         store.structure = .oneFolder
         store.cameraSubfolders = true
         store.syncTarget = "/dst"
@@ -173,6 +175,7 @@ struct SettingsStoreTests {
         #expect(store.synologySecure == false)
         #expect(store.synologyFolders == ["/photo", "/video"])
         #expect(store.dateFormat == "YY-MM-DD")
+        #expect(store.folderSeparator == "")
         #expect(store.structure == .oneFolder)
         #expect(store.cameraSubfolders)
         #expect(store.syncAppendSourceName)
@@ -181,5 +184,6 @@ struct SettingsStoreTests {
         store.reset()
         #expect(store.checkPaths.isEmpty)
         #expect(store.dateFormat == "YYYY.MM.DD")
+        #expect(store.folderSeparator == " - ")
     }
 }
