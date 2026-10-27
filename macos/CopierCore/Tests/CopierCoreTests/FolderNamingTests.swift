@@ -108,6 +108,33 @@ struct DayGroupingTests {
         #expect(groups[2].day == nil)
     }
 
+    @Test("sidecars take the date of the photo they describe")
+    func sidecarDates() {
+        func sidecar(_ name: String, edited: String) -> MediaFile {
+            MediaFile(
+                name: name,
+                url: URL(fileURLWithPath: "/card/\(name)"),
+                relativePath: name,
+                size: 1,
+                modificationDate: DateParsing.parseFlexible(edited),
+                isMedia: MediaExtensions.isMedia(name)
+            )
+        }
+        var files = [
+            file("IMG_0001.CR3", capture: "2026-09-18 10:00:00"),
+            file("IMG_0002.CR3", capture: "2026-09-18 11:00:00"),
+            sidecar("IMG_0001.xmp", edited: "2026-10-20 09:00:00"),
+            sidecar("IMG_0002.CR3.xmp", edited: "2026-10-20 09:00:00"),
+            sidecar("IMG_0009.xmp", edited: "2026-10-20 09:00:00"),
+        ]
+        DayGrouping.adoptSidecarDates(&files)
+        let groups = DayGrouping.group(files)
+        #expect(groups.map(\.id) == ["2026-09-18", "2026-10-20"])
+        #expect(groups[0].files.map(\.name) == ["IMG_0001.CR3", "IMG_0001.xmp", "IMG_0002.CR3", "IMG_0002.CR3.xmp"])
+        // A sidecar without its photo keeps its own date.
+        #expect(groups[1].files.map(\.name) == ["IMG_0009.xmp"])
+    }
+
     @Test("camera grouping keeps first-seen order and falls back to Unknown")
     func cameraGrouping() {
         var a = file("a.jpg", capture: nil)

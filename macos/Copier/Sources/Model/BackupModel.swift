@@ -595,6 +595,7 @@ final class BackupModel {
         for file in result.allFiles {
             allFiles.append(enriched[file.url] ?? file)
         }
+        DayGrouping.adoptSidecarDates(&allFiles)
         filesByURL = Dictionary(uniqueKeysWithValues: allFiles.map { ($0.url, $0) })
 
         let names = Dictionary(locations.map { ($0.sourceName, $0.displayName) }, uniquingKeysWith: { first, _ in first })

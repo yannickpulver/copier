@@ -459,6 +459,35 @@ struct BackupModelTests {
         #expect(model.plan.folders.map(\.files.count) == [2, 2])
     }
 
+    @Test("an XMP edited later stays with its photo in the card folder's folder")
+    func sidecarStaysWithPhoto() async throws {
+        let fixture = try Fixture(days: [("2026-09-18", [("IMG_0001.JPG", 1000), ("IMG_0002.JPG", 1000)])])
+        defer { fixture.remove() }
+        let camera = fixture.card.appendingPathComponent("DCIM/100TEST")
+        let sorted = fixture.card.appendingPathComponent("DCIM/100CANON/Isa & Spencer")
+        try FileManager.default.createDirectory(at: sorted, withIntermediateDirectories: true)
+        for name in ["IMG_0001.JPG", "IMG_0002.JPG"] {
+            try FileManager.default.moveItem(at: camera.appendingPathComponent(name), to: sorted.appendingPathComponent(name))
+        }
+        let xmp = sorted.appendingPathComponent("IMG_0001.xmp")
+        try Data("<x/>".utf8).write(to: xmp)
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        let edited = try #require(formatter.date(from: "2026-10-20 09:00"))
+        try FileManager.default.setAttributes([.modificationDate: edited], ofItemAtPath: xmp.path)
+
+        let model = makeModel(fixture)
+        await model.refreshCards()
+        model.startScan()
+        try await wait(for: model, until: isReview)
+
+        #expect(model.days.map(\.id) == ["2026-09-18"])
+        let day = try #require(model.days.first)
+        #expect(day.files.contains { $0.file.name == "IMG_0001.xmp" })
+        #expect(model.plan.folders.map(\.url.lastPathComponent) == ["2026.09.18 - Isa & Spencer"])
+        #expect(model.plan.folders.map(\.files.count) == [3])
+    }
+
     @Test("splitting a day gives each time block its own folder, merging puts it back")
     func splitAndMergeDay() async throws {
         let fixture = try Fixture(days: [

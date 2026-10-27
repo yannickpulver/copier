@@ -84,6 +84,26 @@ public enum DayGrouping {
         return groups
     }
 
+    /// Give each sidecar the capture date of the photo it describes: an `.xmp` saved
+    /// weeks later must not start a day of its own. Both `IMG_0001.xmp` and
+    /// `IMG_0001.CR3.xmp` next to `IMG_0001.CR3` count; sidecars without a photo
+    /// keep their own date.
+    public static func adoptSidecarDates(_ files: inout [MediaFile]) {
+        var byPath: [String: Date] = [:]
+        var byStem: [String: Date] = [:]
+        for file in files where file.isMedia && !MediaExtensions.isSidecar(file.name) {
+            guard let date = file.captureDate ?? file.modificationDate else { continue }
+            byPath[file.url.path.lowercased()] = date
+            byStem[file.url.deletingPathExtension().path.lowercased()] = date
+        }
+        for index in files.indices where MediaExtensions.isSidecar(files[index].name) {
+            let described = files[index].url.deletingPathExtension().path.lowercased()
+            if let date = byPath[described] ?? byStem[described] {
+                files[index].captureDate = date
+            }
+        }
+    }
+
     /// The days present in `files`, oldest first.
     public static func days(in files: [MediaFile], calendar: Calendar = .current) -> [Day] {
         group(files, calendar: calendar).compactMap(\.day)
