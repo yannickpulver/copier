@@ -9,7 +9,6 @@ enum Theme {
     static let bodySemibold = Font.system(size: 13, weight: .semibold)
     static let secondary = Font.system(size: 12)
     static let caption = Font.system(size: 11, weight: .semibold)
-    static let title = Font.system(size: 21, weight: .semibold)
     static let sectionTitle = Font.system(size: 14, weight: .semibold)
     static let mono = Font.system(size: 12, design: .monospaced)
     static let big = Font.system(size: 38, weight: .semibold)
@@ -69,31 +68,6 @@ struct TagChip: View {
             .padding(.vertical, 2)
             .background(accented ? AnyShapeStyle(Color.accentColor.opacity(0.14)) : AnyShapeStyle(.quaternary))
             .clipShape(.rect(cornerRadius: 4))
-    }
-}
-
-/// The screen header: 21 pt title on the left, a secondary detail on the right.
-struct ScreenHeader<Trailing: View>: View {
-    let title: String
-    @ViewBuilder var trailing: Trailing
-
-    var body: some View {
-        HStack {
-            Text(title).font(Theme.title)
-            Spacer(minLength: 12)
-            trailing
-                .font(Theme.secondary)
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 22)
-        .frame(height: 52)
-        .overlay(alignment: .bottom) { Divider() }
-    }
-}
-
-extension ScreenHeader where Trailing == Text {
-    init(_ title: String, detail: String) {
-        self.init(title: title) { Text(detail) }
     }
 }
 

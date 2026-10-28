@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The row the Electron app had: "CHECK LOCATIONS" plus one pill per source, with a
 /// status dot each. Clicking a pill switches that source off for the next scan.
-/// Shown on Waiting, Scanning and Review, so it is always clear what was checked.
+/// Shown on Waiting and Scanning; Review shows ``CheckedLocationsLine`` instead.
 struct CheckLocationsRow: View {
     @Bindable var model: BackupModel
     @Environment(\.openSettings) private var openSettings
@@ -61,17 +61,7 @@ private struct LocationPill: View {
     var body: some View {
         Button(action: toggle) {
             HStack(spacing: 6) {
-                switch location.reachable {
-                case nil:
-                    ProgressView()
-                        .controlSize(.mini)
-                        .scaleEffect(0.6)
-                        .frame(width: 7, height: 7)
-                case true?:
-                    Circle().fill(Theme.success).frame(width: 7, height: 7)
-                case false?:
-                    Circle().fill(Color.secondary.opacity(0.45)).frame(width: 7, height: 7)
-                }
+                StatusDot(reachable: location.reachable)
 
                 Text(location.isFallback ? "\(location.displayName) (fallback)" : location.displayName)
                     .font(Theme.secondary)
@@ -99,5 +89,48 @@ private struct LocationPill: View {
         case false?: state = "not available"
         }
         return "\(location.detail) — \(state). Click to \(isDisabled ? "include again" : "skip on the next scan")."
+    }
+}
+
+/// Review's version of the row: what the scan checked, as one quiet line.
+/// The locations are picked before the scan, on the Card inserted screen.
+struct CheckedLocationsLine: View {
+    var model: BackupModel
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(model.locations.isEmpty ? "No check locations, every file looks new" : "Checked")
+            ForEach(model.locations) { location in
+                HStack(spacing: 5) {
+                    StatusDot(reachable: location.reachable)
+                    Text(location.displayName)
+                        .strikethrough(model.isDisabled(location))
+                }
+                .opacity(model.isDisabled(location) ? 0.5 : 1)
+                .help(location.detail)
+            }
+        }
+        .font(Theme.secondary)
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+    }
+}
+
+/// Green when the location answered, grey when it did not, a spinner while checking.
+private struct StatusDot: View {
+    let reachable: Bool?
+
+    var body: some View {
+        switch reachable {
+        case nil:
+            ProgressView()
+                .controlSize(.mini)
+                .scaleEffect(0.6)
+                .frame(width: 7, height: 7)
+        case true?:
+            Circle().fill(Theme.success).frame(width: 7, height: 7)
+        case false?:
+            Circle().fill(Color.secondary.opacity(0.45)).frame(width: 7, height: 7)
+        }
     }
 }
