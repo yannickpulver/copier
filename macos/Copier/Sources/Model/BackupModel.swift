@@ -52,8 +52,7 @@ struct ReviewDay: Identifiable, Sendable {
         otherCount = files.count { $0.reason == .other }
     }
 
-    /// The note a fully backed-up day shows instead of a folder field, with the place
-    /// most of it was found in.
+    /// The detail line of a fully backed-up day, with the place most of it was found in.
     var backedUpNote: String {
         guard backedUpCount > 0 else { return "\(otherCount) other file\(otherCount == 1 ? "" : "s")" }
         var note = "All \(backedUpCount) file\(backedUpCount == 1 ? "" : "s") backed up"
@@ -70,6 +69,16 @@ struct ReviewDay: Identifiable, Sendable {
     /// Every place with its full path, for the note's tooltip.
     var placesDetail: String {
         places.map { "\($0.location): \($0.folder.path) (\($0.count))" }.joined(separator: "\n")
+    }
+
+    /// `82 new · 3 backed up · 1 other`, leaving out what is zero.
+    var countsNote: String {
+        let newCount = files.count - backedUpCount - otherCount
+        var parts: [String] = []
+        if newCount > 0 { parts.append("\(newCount) new") }
+        if backedUpCount > 0 { parts.append("\(backedUpCount) backed up") }
+        if otherCount > 0 { parts.append("\(otherCount) other") }
+        return parts.joined(separator: " · ")
     }
 }
 
@@ -625,8 +634,8 @@ final class BackupModel {
         // Folders sorted on the card already say how the day splits.
         splitDayIDs = Set(days.filter { canSplit($0) && $0.clusters.contains { $0.title != nil } }.map(\.id))
         rebuildDayOrder()
-        // Nothing to copy, nothing to look at: a fully backed-up card opens collapsed.
-        expandedDayID = days.first(where: { !$0.newFiles.isEmpty })?.id
+        // Every day starts collapsed, so the screen opens on the overview.
+        expandedDayID = nil
         rebuildTargets()
         autoEnableCameraSubfolders()
         phase = .review

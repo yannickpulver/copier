@@ -161,7 +161,7 @@ private struct CardRow: View {
     }
 }
 
-/// Picks the view for the current phase and keeps the header consistent.
+/// Picks the view for the current phase; its title and detail go into the window's title bar.
 private struct BackupScreen: View {
     @Bindable var model: BackupModel
     var router: SettingsRouter
@@ -170,40 +170,56 @@ private struct BackupScreen: View {
         VStack(spacing: 0) {
             switch model.phase {
             case .waiting:
-                ScreenHeader("Waiting for card", detail: "No card connected")
                 WaitingView(model: model, router: router)
             case .ready:
-                ScreenHeader("Card inserted", detail: "Not scanned yet")
                 ReadyView(model: model, router: router)
             case let .scanning(event):
-                ScreenHeader("Scanning", detail: model.selectedCard?.name ?? "")
                 ScanningView(model: model, event: event, router: router)
             case .review:
-                ScreenHeader(title: "Review") {
-                    HStack(spacing: 10) {
-                        Text("\(model.selectedCard?.name ?? "Card") · \(Format.count(model.scan?.allFiles.count ?? 0)) files")
-                        // Toggling a check-location pill only takes effect on a new scan.
-                        Button("Rescan") { model.startScan() }
-                            .buttonStyle(.link)
-                            .disabled(!model.canScan)
-                            .help("Scan the card again, with the check locations selected above (⌘R).")
-                    }
-                }
-                ReviewView(model: model, router: router)
+                ReviewView(model: model)
             case .copying:
-                ScreenHeader(
-                    "Backing up",
-                    detail: "\(model.selectedCard?.name ?? "Card") → \(model.destination.map(Format.destinationLabel) ?? "")"
-                )
                 CopyingView(model: model)
             case .done:
-                ScreenHeader("Done", detail: model.finishedAt?.formatted(date: .abbreviated, time: .shortened) ?? "")
                 DoneView(model: model)
             case let .failed(error):
-                ScreenHeader("Backup stopped", detail: model.selectedCard?.name ?? "")
                 FailedView(model: model, error: error)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .navigationTitle(title)
+        .navigationSubtitle(subtitle)
+        .toolbar {
+            if case .review = model.phase {
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Rescan") { model.startScan() }
+                        .disabled(!model.canScan)
+                        .help("Scan the card again (⌘R).")
+                }
+            }
+        }
+    }
+
+    private var title: String {
+        switch model.phase {
+        case .waiting: return "Waiting for card"
+        case .ready: return "Card inserted"
+        case .scanning: return "Scanning"
+        case .review: return "Review"
+        case .copying: return "Backing up"
+        case .done: return "Done"
+        case .failed: return "Backup stopped"
+        }
+    }
+
+    private var subtitle: String {
+        let card = model.selectedCard?.name ?? "Card"
+        switch model.phase {
+        case .waiting: return "No card connected"
+        case .ready: return "Not scanned yet"
+        case .scanning, .failed: return card
+        case .review: return "\(card) · \(model.reviewSubtitle)"
+        case .copying: return "\(card) → \(model.destination.map(Format.destinationLabel) ?? "")"
+        case .done: return model.finishedAt?.formatted(date: .abbreviated, time: .shortened) ?? ""
+        }
     }
 }

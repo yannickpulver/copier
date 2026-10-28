@@ -13,13 +13,13 @@ struct FolderSyncView: View {
         // A GeometryReader reports the height it is offered instead of one derived from
         // the content, so the screen is laid out in the space that actually exists.
         GeometryReader { _ in screen }
+            .navigationTitle("Folder Sync")
+            .navigationSubtitle("Compared by name and size")
     }
 
-    /// Header, the cards and the file list, and the action row pinned under a divider.
+    /// The cards and the file list, and the action row pinned under a divider.
     private var screen: some View {
         VStack(spacing: 0) {
-            ScreenHeader("Folder Sync", detail: "Compared by name and size")
-
             // The file list scrolls inside its box and takes the remaining height, so the
             // action row below stays pinned and the copy button is always reachable.
             VStack(alignment: .leading, spacing: 18) {

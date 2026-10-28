@@ -13,28 +13,27 @@ extension FileKind {
     }
 }
 
-/// Screen 2 — what will be copied where. Day blocks, time clusters inside the open day,
-/// and the bottom bar with destination, camera subfolders, total and the primary action.
+/// Screen 2 — what will be copied where. What was checked, the days (all collapsed at
+/// first, backed-up days folded into one row) and the bottom bar with the destination,
+/// total and the primary action.
 struct ReviewView: View {
     @Bindable var model: BackupModel
-    var router: SettingsRouter
+    /// Whether the folded "already backed up" days are shown.
+    @State private var showsBackedUpDays = false
 
     var body: some View {
         VStack(spacing: 0) {
-            CheckLocationsRow(model: model, router: router)
-                .padding(.horizontal, 22)
-                .padding(.top, 14)
-                .padding(.bottom, 12)
-
-            Divider()
-
             VStack(alignment: .leading, spacing: 12) {
-                header
+                HStack(spacing: 12) {
+                    CheckedLocationsLine(model: model)
+                    Spacer(minLength: 12)
+                    structurePicker
+                }
 
                 ForEach(model.failedSources, id: \.name) { source in
                     InlineBanner(
                         kind: .warning,
-                        message: "\(source.name) was not checked — \(source.errorDescription ?? "no connection"). Its pill above is grey, and files stored there look new.",
+                        message: "\(source.name) was not checked — \(source.errorDescription ?? "no connection"). Files stored there look new.",
                         actionTitle: "Retry",
                         action: { model.startScan() }
                     )
@@ -48,25 +47,7 @@ struct ReviewView: View {
                     oneFolderCard
                 }
 
-                GroupedBox {
-                    // The open day fills the space under the other days while that leaves it
-                    // `FileList.minHeight`. Past that the day list scrolls and the file list
-                    // keeps a fixed height, so the other days stay one scroll away.
-                    GeometryReader { geometry in
-                        ViewThatFits(in: .vertical) {
-                            dayList(fileListHeight: nil)
-                            ScrollViewReader { proxy in
-                                ScrollView {
-                                    dayList(fileListHeight: max(FileList.minHeight, geometry.size.height * 0.6))
-                                }
-                                .onChange(of: model.expandedDayID) { _, id in
-                                    guard let id else { return }
-                                    withAnimation { proxy.scrollTo(id, anchor: .top) }
-                                }
-                            }
-                        }
-                    }
-                }
+                GroupedBox { days }
             }
             .padding(.horizontal, 22)
             .padding(.top, 14)
@@ -86,29 +67,15 @@ struct ReviewView: View {
         }
     }
 
-    // MARK: Header
-
-    private var header: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("\(Format.count(model.tickedCount)) file\(model.tickedCount == 1 ? "" : "s") selected on \(model.selectedCard?.name ?? "card")")
-                    .font(Theme.sectionTitle)
-                    .lineLimit(1)
-                Text(model.reviewSubtitle)
-                    .font(Theme.secondary)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 12)
-            Picker("", selection: Binding(get: { model.structure }, set: { model.structure = $0 })) {
-                Text("Folder per day").tag(Structure.folderPerDay)
-                Text("One folder").tag(Structure.oneFolder)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
-            .font(Theme.secondary)
+    private var structurePicker: some View {
+        Picker("", selection: Binding(get: { model.structure }, set: { model.structure = $0 })) {
+            Text("Folder per day").tag(Structure.folderPerDay)
+            Text("One folder").tag(Structure.oneFolder)
         }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
+        .font(Theme.secondary)
     }
 
     private var allBackedUpNotice: some View {
@@ -148,57 +115,120 @@ struct ReviewView: View {
 
     // MARK: Day list
 
+    /// Collapsed days hug their rows and scroll once they outgrow the window. An open day
+    /// fills the space under the other days while that leaves it `FileList.minHeight`; past
+    /// that the day list scrolls and the file list keeps a fixed height, so the other days
+    /// stay one scroll away.
+    @ViewBuilder private var days: some View {
+        if model.expandedDayID == nil {
+            ViewThatFits(in: .vertical) {
+                dayList(fileListHeight: nil)
+                ScrollView { dayList(fileListHeight: nil) }
+            }
+        } else {
+            GeometryReader { geometry in
+                ViewThatFits(in: .vertical) {
+                    dayList(fileListHeight: nil)
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            dayList(fileListHeight: max(FileList.minHeight, geometry.size.height * 0.6))
+                        }
+                        .onAppear { scroll(proxy, to: model.expandedDayID) }
+                        .onChange(of: model.expandedDayID) { _, id in scroll(proxy, to: id) }
+                    }
+                }
+            }
+        }
+    }
+
+    private func scroll(_ proxy: ScrollViewProxy, to id: String?) {
+        guard let id else { return }
+        withAnimation { proxy.scrollTo(id, anchor: .top) }
+    }
+
+    /// Days with something to copy, then one row for the fully backed-up days, which
+    /// unfolds into their own rows.
     /// - Parameter fileListHeight: a fixed height for the open day's files; `nil` lets them
     ///   take the space left under the other days.
     private func dayList(fileListHeight: CGFloat?) -> some View {
-        VStack(spacing: 0) {
-            ForEach(Array(model.orderedDays.enumerated()), id: \.element.id) { index, day in
-                let isSettled = model.isBackedUpOnly(day)
-                // The first fully backed-up day opens the second block.
-                let startsSettledBlock = isSettled
-                    && (index == 0 || !model.isBackedUpOnly(model.orderedDays[index - 1]))
-
-                if startsSettledBlock {
-                    HStack(spacing: 8) {
-                        SectionLabel(text: "Already backed up")
-                        VStack { Divider() }
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.top, 10)
-                    .padding(.bottom, 2)
-                } else if index > 0 {
-                    Divider()
-                }
-
-                let isExpanded = model.expandedDayID == day.id
-                VStack(spacing: 0) {
-                    DayHeaderRow(model: model, day: day, isExpanded: isExpanded, isSettled: isSettled)
-                    if model.isSplit(day), !isSettled, model.structure == .folderPerDay {
-                        ForEach(Array(day.clusters.enumerated()), id: \.element.id) { block, cluster in
-                            BlockRow(model: model, day: day, block: block, cluster: cluster)
-                        }
-                    }
-                    if isExpanded {
+        // `orderedDays` keeps the backed-up days at the end.
+        let split = model.orderedDays.firstIndex { model.isBackedUpOnly($0) } ?? model.orderedDays.count
+        let active = model.orderedDays[..<split]
+        let settled = model.orderedDays[split...]
+        return VStack(spacing: 0) {
+            ForEach(Array(active.enumerated()), id: \.element.id) { index, day in
+                if index > 0 { Divider() }
+                dayBlock(day, isSettled: false, fileListHeight: fileListHeight)
+            }
+            if !settled.isEmpty {
+                if !active.isEmpty { Divider() }
+                BackedUpDaysRow(days: Array(settled), isOpen: $showsBackedUpDays)
+                if showsBackedUpDays {
+                    ForEach(settled) { day in
                         Divider()
-                        FileList(model: model, day: day, height: fileListHeight)
+                        dayBlock(day, isSettled: true, fileListHeight: fileListHeight)
                     }
                 }
-                .frame(maxHeight: isExpanded ? .infinity : nil)
-                .id(day.id)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, maxHeight: model.expandedDayID == nil ? nil : .infinity, alignment: .top)
     }
+
+    private func dayBlock(_ day: ReviewDay, isSettled: Bool, fileListHeight: CGFloat?) -> some View {
+        let isExpanded = model.expandedDayID == day.id
+        return VStack(spacing: 0) {
+            DayHeaderRow(model: model, day: day, isExpanded: isExpanded, isSettled: isSettled)
+            if model.isSplit(day), !isSettled, model.structure == .folderPerDay {
+                ForEach(Array(day.clusters.enumerated()), id: \.element.id) { block, cluster in
+                    BlockRow(model: model, day: day, block: block, cluster: cluster)
+                }
+            }
+            if isExpanded {
+                Divider()
+                FileList(model: model, day: day, height: fileListHeight)
+            }
+        }
+        .frame(maxHeight: isExpanded ? .infinity : nil)
+        .id(day.id)
+    }
+}
+
+/// `› 4 days already backed up · 68 files` — folds the days with nothing to copy.
+private struct BackedUpDaysRow: View {
+    let days: [ReviewDay]
+    @Binding var isOpen: Bool
+
+    var body: some View {
+        Button {
+            withAnimation(.snappy(duration: 0.2)) { isOpen.toggle() }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: isOpen ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 10, weight: .bold))
+                Text("\(days.count) day\(days.count == 1 ? "" : "s") already backed up · \(Format.count(files)) file\(files == 1 ? "" : "s")")
+                    .font(Theme.secondary)
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var files: Int { days.reduce(0) { $0 + $1.files.count } }
 }
 
 // MARK: - Day header
 
-/// The tinted band that separates one day from the next.
+/// One day: checkbox, previews, date with its counts and times, and its folder. The
+/// kind counts and the split button only show while the day is open.
 private struct DayHeaderRow: View {
     @Bindable var model: BackupModel
     let day: ReviewDay
     let isExpanded: Bool
-    /// A day with nothing to copy: no band, greyed, no folder field.
+    /// A day with nothing to copy: greyed, no folder field.
     var isSettled: Bool = false
 
     var body: some View {
@@ -230,18 +260,17 @@ private struct DayHeaderRow: View {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(.secondary)
-                    Text(Format.dayWithWeekday(day.day))
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(isSettled ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
-                    let range = Format.timeRange(day.files.map(\.file))
-                    if !range.isEmpty {
-                        Text(range)
+                        // Both chevrons get the same width, so the date does not shift.
+                        .frame(width: 10)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(Format.dayWithWeekday(day.day))
+                            .font(Theme.bodySemibold)
+                            .foregroundStyle(isSettled ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+                        Text(detail)
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 2)
-                            .background(.quaternary, in: .capsule)
+                            .help(isSettled ? day.placesDetail : "")
                     }
                 }
                 .fixedSize()
@@ -249,21 +278,23 @@ private struct DayHeaderRow: View {
             }
             .buttonStyle(.plain)
 
-            if isSettled {
-                // Nothing to copy here, so there is no folder to choose either.
-                Text(day.backedUpNote)
-                    .font(Theme.secondary)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .help(day.placesDetail)
-                Spacer(minLength: 8)
-            } else if model.structure == .folderPerDay {
+            if isExpanded {
+                // The counts are the first thing to give way in a narrow window.
+                ViewThatFits(in: .horizontal) {
+                    KindCounts(counts: day.kindCounts)
+                    EmptyView()
+                }
+                .opacity(isSettled ? 0.55 : 1)
+            }
+
+            Spacer(minLength: 8)
+
+            if !isSettled, model.structure == .folderPerDay {
                 if model.isSplit(day) {
                     Text("\(day.clusters.count) shoots")
                         .font(Theme.secondary)
                         .foregroundStyle(.secondary)
                         .fixedSize()
-                    Spacer(minLength: 8)
                     Button {
                         model.merge(day)
                     } label: {
@@ -275,7 +306,8 @@ private struct DayHeaderRow: View {
                     .fixedSize()
                 } else {
                     FolderField(model: model, day: day)
-                    if model.canSplit(day) {
+                        .frame(maxWidth: 360)
+                    if isExpanded, model.canSplit(day) {
                         Button {
                             model.split(day)
                         } label: {
@@ -287,20 +319,17 @@ private struct DayHeaderRow: View {
                         .accessibilityLabel("Split day")
                     }
                 }
-            } else {
-                Spacer(minLength: 8)
             }
-
-            // The counts column is the first thing to give way in a narrow window.
-            ViewThatFits(in: .horizontal) {
-                KindCounts(counts: day.kindCounts)
-                EmptyView()
-            }
-            .opacity(isSettled ? 0.55 : 1)
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 9)
-        .background(isSettled ? AnyShapeStyle(.clear) : AnyShapeStyle(Color.accentColor.opacity(0.07)))
+        .padding(.vertical, 8)
+    }
+
+    /// `82 new · 3 backed up · 10:00–15:00`, or where a fully backed-up day was found.
+    private var detail: String {
+        let range = Format.timeRange(day.files.map(\.file))
+        let counts = isSettled ? day.backedUpNote : day.countsNote
+        return [counts, range].filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
     /// A split day lists its blocks below, each with its own thumbnail.
@@ -334,7 +363,6 @@ private struct BlockRow: View {
         .padding(.leading, 42)
         .padding(.trailing, 14)
         .padding(.bottom, 7)
-        .background(Color.accentColor.opacity(0.07))
     }
 }
 
@@ -491,21 +519,7 @@ private struct BottomBar: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Text("Back up to")
-                .font(Theme.secondary)
-                .foregroundStyle(.secondary)
-                .fixedSize()
-
-            destinationMenu
-
-            Toggle(
-                "Camera subfolders",
-                isOn: Binding(get: { model.cameraSubfolders }, set: { model.cameraSubfolders = $0 })
-            )
-            .toggleStyle(.switch)
-            .controlSize(.mini)
-            .font(Theme.secondary)
-            .fixedSize()
+            destinationField
 
             Spacer(minLength: 8)
 
@@ -545,26 +559,37 @@ private struct BottomBar: View {
                     model.setDestination(url)
                 }
             }
+            Divider()
+            Toggle(
+                "Camera subfolders",
+                isOn: Binding(get: { model.cameraSubfolders }, set: { model.cameraSubfolders = $0 })
+            )
         } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "externaldrive")
-                    .foregroundStyle(.secondary)
-                Text(model.destination.map(Format.destinationLabel) ?? "Choose a destination")
-                    .font(Theme.secondary)
-                    .fontWeight(.medium)
-                    .lineLimit(1)
-                    .truncationMode(.head)
-                if let free = model.destinationFreeBytes {
-                    Text("\(Format.bytes(free)) free")
-                        .font(Theme.secondary)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                        .fixedSize()
-                }
-            }
+            // A macOS menu label shows only its icon and first text, so the free space
+            // and the camera note sit beside the menu, inside the same field.
+            Label(model.destination.map(Format.destinationLabel) ?? "Choose a destination", systemImage: "externaldrive")
+                .font(Theme.secondary)
+                .fontWeight(.medium)
         }
         .menuStyle(.borderlessButton)
-        .frame(minWidth: 140)
+        .fixedSize()
+    }
+
+    private var destinationField: some View {
+        HStack(spacing: 8) {
+            destinationMenu
+            if let free = model.destinationFreeBytes {
+                Text("\(Format.bytes(free)) free")
+                    .monospacedDigit()
+            }
+            // The switch lives in the menu, so the field says when it is on.
+            if model.cameraSubfolders {
+                Text("· per camera")
+            }
+        }
+        .font(Theme.secondary)
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
         .padding(.horizontal, 10)
         .frame(height: 32)
         .background(Theme.fieldBackground)

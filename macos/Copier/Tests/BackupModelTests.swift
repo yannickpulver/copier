@@ -712,11 +712,12 @@ struct BackupModelTests {
         #expect(model.orderedDays.map(\.id) == ["2026-09-19", "2026-09-18"])
         #expect(model.isBackedUpOnly(model.days[0]))
         #expect(model.isBackedUpOnly(model.days[1]) == false)
-        #expect(model.expandedDayID == "2026-09-19")
+        #expect(model.expandedDayID == nil)
 
         let settled = try #require(model.orderedDays.last)
         // Where: the location and the dated folder above the camera subfolder.
         #expect(settled.backedUpNote == "All 2 files backed up in Fake NAS › 2026.09.18 - Trip · 1 other")
+        #expect(settled.countsNote == "2 backed up · 1 other")
 
         // Ticking a file in a settled day moves it back into the first block.
         let file = try #require(settled.files.first { $0.reason == .backedUp })

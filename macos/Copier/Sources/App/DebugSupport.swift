@@ -12,6 +12,7 @@
     /// - `COPIER_SNAPSHOT_OPEN=settings|sync` — also open that screen and snapshot it.
     /// - `COPIER_SNAPSHOT_COMPARE=1` — with `sync`, also run Compare and snapshot the result.
     /// - `COPIER_SNAPSHOT_COPY=1` — with `sync`, also run the copy and snapshot it running and done.
+    /// - `COPIER_SNAPSHOT_EXPAND=1` — on Review, also open the first day and snapshot `review-open`.
     /// - `COPIER_FIXTURE_CARD=<dir>` — expose a folder as a card (read in `CopierApp`).
     /// - `COPIER_WINDOW_SIZE=920x620` — force the main window's content size, so a run
     ///   can check the layout at the window's minimum.
@@ -55,6 +56,12 @@
         /// snapshot `sync-copying.png` and `sync-finished.png`: `COPIER_SNAPSHOT_COPY=1`.
         static var copies: Bool {
             let value = environment["COPIER_SNAPSHOT_COPY"] ?? ""
+            return value == "1" || value.lowercased() == "true"
+        }
+
+        /// With `COPIER_SNAPSHOT_SCAN=1`, also open the first day on Review: `COPIER_SNAPSHOT_EXPAND=1`.
+        static var expandsDay: Bool {
+            let value = environment["COPIER_SNAPSHOT_EXPAND"] ?? ""
             return value == "1" || value.lowercased() == "true"
         }
 
@@ -124,13 +131,14 @@
         }
 
         /// The settings snapshot wants the settings window, everything else the main one.
+        /// Both are found by identifier: their titles follow the screen or tab.
         @MainActor
         private static func targetWindow(for name: String) -> NSWindow? {
             let windows = NSApp?.windows.filter { $0.isVisible && $0.contentView != nil } ?? []
             if name == "settings" {
-                return windows.first { $0.title.localizedCaseInsensitiveContains("settings") } ?? windows.last
+                return windows.first { $0.identifier?.rawValue.contains("Settings") == true } ?? windows.last
             }
-            return windows.first { $0.title == "Copier" } ?? windows.first
+            return windows.first { $0.identifier?.rawValue == "main" } ?? windows.first
         }
 
         /// `COPIER_PROBE_NAS=1` runs the same login the Settings test button does and
@@ -171,6 +179,13 @@
         func debugSnapshots(model: BackupModel, sync: SyncModel, screen: Binding<Screen>) -> some View {
             onChange(of: model.phaseName) { _, phase in
                 DebugSupport.snapshot(phase)
+                if phase == "review", DebugSupport.expandsDay {
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(2))
+                        model.expandedDayID = model.orderedDays.first?.id
+                        DebugSupport.snapshot("review-open")
+                    }
+                }
             }
             .task {
                 await DebugSupport.probeNAS()
