@@ -20,7 +20,14 @@ enum ConnectionState: Equatable, Sendable {
     case failed(String)
 }
 
-/// Bindable wrapper around ``SettingsStore`` for the Settings window.
+/// Light or dark windows, or whatever macOS uses.
+enum Appearance: String, CaseIterable {
+    case system
+    case light
+    case dark
+}
+
+/// Bindable wrapper around ``SettingsStore`` for the Settings screen.
 @MainActor
 @Observable
 final class SettingsModel {
@@ -69,6 +76,10 @@ final class SettingsModel {
         didSet { store.folderSeparator = folderSeparator }
     }
 
+    var appearance: Appearance {
+        didSet { store.appearance = appearance.rawValue }
+    }
+
     private(set) var connection: ConnectionState = .idle
     /// Bumped whenever something the check-location pills show has changed.
     private(set) var locationsRevision = 0
@@ -90,6 +101,7 @@ final class SettingsModel {
         synologyPassword = store.synologyPassword ?? keychain.synologyPassword ?? ""
         dateFormat = store.dateFormat
         folderSeparator = store.folderSeparator
+        appearance = Appearance(rawValue: store.appearance) ?? .system
     }
 
     private func storePassword(_ value: String) {

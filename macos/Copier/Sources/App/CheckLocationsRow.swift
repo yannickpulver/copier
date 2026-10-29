@@ -6,8 +6,7 @@ import SwiftUI
 /// Shown on Waiting and Scanning; Review shows ``CheckedLocationsLine`` instead.
 struct CheckLocationsRow: View {
     @Bindable var model: BackupModel
-    @Environment(\.openSettings) private var openSettings
-    var router: SettingsRouter
+    var router: AppRouter
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
@@ -18,7 +17,7 @@ struct CheckLocationsRow: View {
                 Text("No check locations. Every file will look new.")
                     .font(Theme.secondary)
                     .foregroundStyle(.secondary)
-                Button("Add location…") { open(.locations) }
+                Button("Add location…") { open(.duplicateCheck) }
                     .buttonStyle(.link)
                     .font(Theme.secondary)
             } else {
@@ -36,7 +35,7 @@ struct CheckLocationsRow: View {
                 }
                 .scrollIndicators(.never)
 
-                Button("Edit…") { open(.locations) }
+                Button("Edit…") { open(.duplicateCheck) }
                     .buttonStyle(.link)
                     .font(Theme.secondary)
                     .fixedSize()
@@ -46,9 +45,8 @@ struct CheckLocationsRow: View {
         }
     }
 
-    private func open(_ tab: SettingsTab) {
-        router.tab = tab
-        openSettings()
+    private func open(_ chapter: SettingsChapter) {
+        router.openSettings(chapter)
     }
 }
 

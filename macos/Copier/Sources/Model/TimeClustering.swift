@@ -18,6 +18,20 @@ enum FileKind: String, Sendable, CaseIterable {
         }
     }
 
+    /// The kind a file name's extension stands for.
+    init(fileName: String) {
+        let ext = MediaExtensions.extension(of: fileName)
+        if MediaExtensions.raw.contains(ext) {
+            self = .raw
+        } else if MediaExtensions.photo.contains(ext) {
+            self = .photo
+        } else if MediaExtensions.video.contains(ext) {
+            self = .video
+        } else {
+            self = .other
+        }
+    }
+
     var symbolName: String {
         switch self {
         case .photo: return "photo"
@@ -40,13 +54,7 @@ extension MediaFile {
         return folders[camera + 1]
     }
 
-    var kind: FileKind {
-        let ext = fileExtension
-        if MediaExtensions.raw.contains(ext) { return .raw }
-        if MediaExtensions.photo.contains(ext) { return .photo }
-        if MediaExtensions.video.contains(ext) { return .video }
-        return .other
-    }
+    var kind: FileKind { FileKind(fileName: name) }
 }
 
 /// A run of files taken close together, used to break a long day apart. When the user

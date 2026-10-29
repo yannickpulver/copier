@@ -85,4 +85,11 @@ enum Format {
         let components = url.standardizedFileURL.pathComponents.filter { $0 != "/" }
         return components.suffix(2).joined(separator: " · ")
     }
+
+    /// The folders above a folder, `yannick › Photos › 2026`, without `/Volumes`.
+    static func parentTrail(_ url: URL) -> String {
+        var components = url.standardizedFileURL.deletingLastPathComponent().pathComponents.filter { $0 != "/" }
+        if components.first == "Volumes" { components.removeFirst() }
+        return components.joined(separator: " › ")
+    }
 }

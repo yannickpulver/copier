@@ -4,7 +4,7 @@ import SwiftUI
 /// Screen 1 — no card connected. Calm: the check-locations row, and one hint.
 struct WaitingView: View {
     @Bindable var model: BackupModel
-    var router: SettingsRouter
+    var router: AppRouter
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {

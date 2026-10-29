@@ -6,7 +6,7 @@ import SwiftUI
 struct ScanningView: View {
     @Bindable var model: BackupModel
     let event: ScanEvent?
-    var router: SettingsRouter
+    var router: AppRouter
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {

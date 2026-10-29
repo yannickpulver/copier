@@ -21,6 +21,20 @@ final class SyncModel {
         var id: String { path }
         let path: String
         let size: Int64
+        /// A file of that name is already in the target with another size: copying overwrites it.
+        var replaces = false
+
+        var name: String { (path as NSString).lastPathComponent }
+    }
+
+    /// The rows of one folder in the file list. `id` is the folder path, empty for files
+    /// that sit directly in the source folder.
+    struct FileGroup: Identifiable {
+        let id: String
+        let title: String
+        let rows: [SyncRow]
+
+        var bytes: Int64 { rows.reduce(0) { $0 + $1.size } }
     }
 
     /// Everything compare() found for one source, resolved against its own destination.
@@ -57,6 +71,9 @@ final class SyncModel {
     var syncFinderTags: Bool = true
 
     private(set) var results: [SourceResult] = []
+    /// The folder groups open in the file list. After a compare a short list opens every
+    /// group; a long one starts closed unless it is a single group.
+    var expandedGroups: Set<String> = []
     private(set) var errorMessage: String?
 
     private(set) var bytesPerSecond: Double = 0
@@ -101,6 +118,7 @@ final class SyncModel {
         work?.cancel()
         work = nil
         results = []
+        expandedGroups = []
         errorMessage = nil
         if case .compared = phase { phase = .idle }
         if isBusy { phase = .idle }
@@ -147,20 +165,43 @@ final class SyncModel {
     /// Files that exist in the target with a different size — these get overwritten.
     var replacedCount: Int { results.reduce(0) { $0 + $1.diff.different.count } }
 
+    /// Source files the target already has with the same name and size.
+    var identicalCount: Int { results.reduce(0) { $0 + $1.diff.present.count } }
+
     var tagUpdates: [TagUpdate] { results.flatMap(\.tagUpdates) }
 
     /// Rows ready to display, prefixed with the source folder name when there is
     /// more than one source so files from different sources aren't confused.
     var displayFiles: [SyncRow] {
-        guard results.count > 1 else {
-            return filesToCopy.map { SyncRow(path: $0.relativePath, size: $0.size) }
-        }
+        let prefixes = results.count > 1
         return results.flatMap { result in
-            let prefix = result.source.lastPathComponent
-            return (result.diff.missing + result.diff.different).map {
-                SyncRow(path: "\(prefix)/\($0.relativePath)", size: $0.size)
-            }
+            let prefix = prefixes ? "\(result.source.lastPathComponent)/" : ""
+            return result.diff.missing.map { SyncRow(path: prefix + $0.relativePath, size: $0.size) }
+                + result.diff.different.map { SyncRow(path: prefix + $0.relativePath, size: $0.size, replaces: true) }
         }
+    }
+
+    /// Up to this many files, every group starts open.
+    static let openListLimit = 50
+
+    /// `displayFiles` grouped by folder, a folder's own files before its subfolders.
+    var fileGroups: [FileGroup] {
+        Self.groups(displayFiles, topLevelTitle: results.first?.source.lastPathComponent ?? "")
+    }
+
+    /// Groups rows by the folder part of their path. Rows without a folder get
+    /// `topLevelTitle`: with one source that is the source folder's own name.
+    static func groups(_ rows: [SyncRow], topLevelTitle: String) -> [FileGroup] {
+        var order: [String] = []
+        var byFolder: [String: [SyncRow]] = [:]
+        for row in rows {
+            let folder = (row.path as NSString).deletingLastPathComponent
+            if byFolder[folder] == nil { order.append(folder) }
+            byFolder[folder, default: []].append(row)
+        }
+        return order
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+            .map { FileGroup(id: $0, title: $0.isEmpty ? topLevelTitle : $0, rows: byFolder[$0] ?? []) }
     }
 
     var canCompare: Bool {
@@ -296,6 +337,9 @@ final class SyncModel {
             await MainActor.run {
                 guard let self else { return }
                 self.results = collected
+                let groups = self.fileGroups
+                let isShort = groups.reduce(0) { $0 + $1.rows.count } <= Self.openListLimit
+                self.expandedGroups = groups.count == 1 || isShort ? Set(groups.map(\.id)) : []
                 self.phase = .compared
             }
         }

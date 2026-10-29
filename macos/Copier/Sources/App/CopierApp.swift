@@ -8,7 +8,7 @@ struct CopierApp: App {
     @State private var backup: BackupModel
     @State private var sync: SyncModel
     @State private var settings: SettingsModel
-    @State private var router = SettingsRouter()
+    @State private var router = AppRouter()
     @State private var updater = Updater()
 
     init() {
@@ -34,8 +34,11 @@ struct CopierApp: App {
 
     var body: some Scene {
         Window("Copier", id: "main") {
-            RootView(backup: backup, sync: sync, router: router)
+            RootView(backup: backup, sync: sync, settings: settings, router: router, updater: updater)
                 .frame(minWidth: 920, minHeight: 620)
+                .onChange(of: settings.appearance, initial: true) { _, appearance in
+                    NSApp.appearance = appearance.nsAppearance
+                }
                 // Settings changes (locations, NAS) must show up in the pills.
                 .onChange(of: settings.locationsRevision) { _, _ in
                     backup.reloadLocations()
@@ -53,6 +56,9 @@ struct CopierApp: App {
                 Button("Check for Updates…") { updater.checkForUpdates() }
                     .disabled(!updater.canCheckForUpdates)
             }
+            CommandGroup(replacing: .appSettings) {
+                SettingsCommand(router: router)
+            }
             CommandGroup(replacing: .newItem) {}
             CommandGroup(after: .toolbar) {
                 Button("Scan Card") { backup.startScan() }
@@ -62,10 +68,6 @@ struct CopierApp: App {
                     .keyboardShortcut("r", modifiers: [.command, .shift])
                     .disabled(!backup.canScan)
             }
-        }
-
-        Settings {
-            SettingsWindow(model: settings, router: router, updater: updater)
         }
     }
 
@@ -86,6 +88,31 @@ struct CopierApp: App {
             }
         #endif
         return nil
+    }
+}
+
+/// ⌘, shows Settings inside the main window, and reopens the window when it was closed.
+private struct SettingsCommand: View {
+    var router: AppRouter
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("Settings…") {
+            router.openSettings()
+            openWindow(id: "main")
+        }
+        .keyboardShortcut(",", modifiers: .command)
+    }
+}
+
+extension Appearance {
+    /// `nil` follows the system.
+    var nsAppearance: NSAppearance? {
+        switch self {
+        case .system: return nil
+        case .light: return NSAppearance(named: .aqua)
+        case .dark: return NSAppearance(named: .darkAqua)
+        }
     }
 }
 
