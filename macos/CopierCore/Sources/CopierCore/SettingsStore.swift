@@ -23,6 +23,7 @@ public final class SettingsStore: @unchecked Sendable {
         public static let syncAppendSourceName = "copier.syncAppendSourceName"
         public static let cameraSubfolders = "copier.cameraSubfolders"
         public static let structure = "copier.structure"
+        public static let appearance = "copier.appearance"
     }
 
     private let defaults: UserDefaults
@@ -110,6 +111,12 @@ public final class SettingsStore: @unchecked Sendable {
     public var folderSeparator: String {
         get { defaults.string(forKey: Key.folderSeparator) ?? FolderNaming.defaultSeparator }
         set { defaults.set(newValue, forKey: Key.folderSeparator) }
+    }
+
+    /// `system`, `light` or `dark`. Defaults to following the system.
+    public var appearance: String {
+        get { defaults.string(forKey: Key.appearance) ?? "system" }
+        set { defaults.set(newValue, forKey: Key.appearance) }
     }
 
     /// Whether files go into a `<camera>` subfolder.

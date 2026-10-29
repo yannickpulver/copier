@@ -10,14 +10,16 @@
     /// - `COPIER_DEFAULTS_SUITE=<name>` — keep settings in their own defaults suite.
     /// - `COPIER_SNAPSHOT_DIR=<dir>` — write a PNG of the window on every phase change.
     /// - `COPIER_SNAPSHOT_OPEN=settings|sync` — also open that screen and snapshot it.
+    /// - `COPIER_SETTINGS_CHAPTER=backup|duplicateCheck|nas|general` — with `settings`, scroll to that chapter.
     /// - `COPIER_SNAPSHOT_COMPARE=1` — with `sync`, also run Compare and snapshot the result.
+    /// - `COPIER_SYNC_SOURCES=<dir>|<dir>`, `COPIER_SYNC_TARGET=<dir>` — with `sync`, pick these folders first.
     /// - `COPIER_SNAPSHOT_COPY=1` — with `sync`, also run the copy and snapshot it running and done.
     /// - `COPIER_SNAPSHOT_EXPAND=1` — on Review, also open the first day and snapshot `review-open`.
     /// - `COPIER_FIXTURE_CARD=<dir>` — expose a folder as a card (read in `CopierApp`).
     /// - `COPIER_WINDOW_SIZE=920x620` — force the main window's content size, so a run
     ///   can check the layout at the window's minimum.
     enum DebugSupport {
-        private static var environment: [String: String] { ProcessInfo.processInfo.environment }
+        fileprivate static var environment: [String: String] { ProcessInfo.processInfo.environment }
 
         /// A separate defaults suite when one was requested, otherwise the standard one.
         static var defaults: UserDefaults {
@@ -46,6 +48,19 @@
             return value == "1" || value.lowercased() == "true"
         }
 
+        /// Folder Sync sources for a snapshot run, `|`-separated: `COPIER_SYNC_SOURCES`.
+        static var syncSources: [URL] {
+            (environment["COPIER_SYNC_SOURCES"] ?? "")
+                .split(separator: "|")
+                .map { URL(fileURLWithPath: String($0)) }
+        }
+
+        /// The Folder Sync target for a snapshot run: `COPIER_SYNC_TARGET`.
+        static var syncTarget: URL? {
+            guard let path = environment["COPIER_SYNC_TARGET"], !path.isEmpty else { return nil }
+            return URL(fileURLWithPath: path)
+        }
+
         /// With `COPIER_SNAPSHOT_OPEN=sync`, also press Compare and snapshot `sync-compared.png`.
         static var startsCompare: Bool {
             let value = environment["COPIER_SNAPSHOT_COMPARE"] ?? ""
@@ -72,7 +87,7 @@
         static func applyWindowSize() {
             guard let value = environment["COPIER_WINDOW_SIZE"] else { return }
             let parts = value.lowercased().split(separator: "x").compactMap { Double($0) }
-            guard parts.count == 2, let window = targetWindow(for: "main") else { return }
+            guard parts.count == 2, let window = mainWindow() else { return }
             window.setContentSize(CGSize(width: parts[0], height: parts[1]))
         }
 
@@ -87,7 +102,7 @@
 
         @MainActor
         private static func capture(_ name: String, into directory: URL) {
-            guard let window = targetWindow(for: name), let content = window.contentView else { return }
+            guard let window = mainWindow(), let content = window.contentView else { return }
             let bounds = content.bounds
             guard bounds.width > 1, bounds.height > 1 else { return }
             let representation: NSBitmapImageRep
@@ -130,14 +145,10 @@
             for sub in view.subviews { dump(sub, depth: depth + 1) }
         }
 
-        /// The settings snapshot wants the settings window, everything else the main one.
-        /// Both are found by identifier: their titles follow the screen or tab.
+        /// The main window, found by identifier: its title follows the screen.
         @MainActor
-        private static func targetWindow(for name: String) -> NSWindow? {
+        private static func mainWindow() -> NSWindow? {
             let windows = NSApp?.windows.filter { $0.isVisible && $0.contentView != nil } ?? []
-            if name == "settings" {
-                return windows.first { $0.identifier?.rawValue.contains("Settings") == true } ?? windows.last
-            }
             return windows.first { $0.identifier?.rawValue == "main" } ?? windows.first
         }
 
@@ -165,18 +176,12 @@
                 }
             }
         }
-
-        /// Opens the Settings window through the standard menu action.
-        @MainActor
-        static func openSettings() {
-            NSApp?.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-        }
     }
 
     extension View {
         /// Snapshots each phase change plus a `launch.png`, and optionally opens one
         /// extra screen — all of it inert unless `COPIER_SNAPSHOT_DIR` is set.
-        func debugSnapshots(model: BackupModel, sync: SyncModel, screen: Binding<Screen>) -> some View {
+        func debugSnapshots(model: BackupModel, sync: SyncModel, router: AppRouter) -> some View {
             onChange(of: model.phaseName) { _, phase in
                 DebugSupport.snapshot(phase)
                 if phase == "review", DebugSupport.expandsDay {
@@ -200,11 +205,14 @@
                 switch DebugSupport.snapshotOpen {
                 case "settings":
                     try? await Task.sleep(for: .seconds(3))
-                    DebugSupport.openSettings()
+                    let chapter = SettingsChapter.allCases.first { "\($0)" == DebugSupport.environment["COPIER_SETTINGS_CHAPTER"] }
+                    router.openSettings(chapter)
                     DebugSupport.snapshot("settings")
                 case "sync":
                     try? await Task.sleep(for: .seconds(3))
-                    screen.wrappedValue = .folderSync
+                    router.screen = .folderSync
+                    if let target = DebugSupport.syncTarget { sync.target = target }
+                    if !DebugSupport.syncSources.isEmpty { sync.sources = DebugSupport.syncSources }
                     DebugSupport.applyWindowSize()
                     DebugSupport.snapshot("sync")
                     if DebugSupport.startsCompare, sync.canCompare {

@@ -6,25 +6,44 @@ import SwiftUI
 enum Screen: Hashable {
     case backup
     case folderSync
+    case settings
+}
+
+/// Which screen the main window shows. Lets any screen, and the ⌘, menu item, open
+/// Settings, optionally scrolled to a chapter.
+@MainActor
+@Observable
+final class AppRouter {
+    var screen: Screen = .backup
+    /// The chapter Settings should scroll to; cleared once it has.
+    var settingsChapter: SettingsChapter?
+
+    func openSettings(_ chapter: SettingsChapter? = nil) {
+        settingsChapter = chapter
+        screen = .settings
+    }
 }
 
 /// NavigationSplitView shell: 200 pt sidebar, one detail view per screen.
 struct RootView: View {
     @Bindable var backup: BackupModel
     @Bindable var sync: SyncModel
-    var router: SettingsRouter
-    @State private var screen: Screen = .backup
+    var settings: SettingsModel
+    @Bindable var router: AppRouter
+    var updater: Updater
 
     var body: some View {
         NavigationSplitView {
-            Sidebar(backup: backup, screen: $screen)
+            Sidebar(backup: backup, router: router)
                 .navigationSplitViewColumnWidth(200)
         } detail: {
-            switch screen {
+            switch router.screen {
             case .backup:
                 BackupScreen(model: backup, router: router)
             case .folderSync:
                 FolderSyncView(model: sync)
+            case .settings:
+                SettingsView(model: settings, router: router, updater: updater)
             }
         }
         .task {
@@ -32,7 +51,7 @@ struct RootView: View {
             await backup.checkLocations()
         }
         .task { await Self.watchVolumes(backup) }
-        .modifier(DebugSnapshotModifier(model: backup, sync: sync, screen: $screen))
+        .modifier(DebugSnapshotModifier(model: backup, sync: sync, router: router))
     }
 
     /// Mount / unmount / rename notifications drive the card list.
@@ -60,11 +79,11 @@ struct RootView: View {
 private struct DebugSnapshotModifier: ViewModifier {
     let model: BackupModel
     let sync: SyncModel
-    @Binding var screen: Screen
+    let router: AppRouter
 
     func body(content: Content) -> some View {
         #if DEBUG
-            content.debugSnapshots(model: model, sync: sync, screen: $screen)
+            content.debugSnapshots(model: model, sync: sync, router: router)
         #else
             content
         #endif
@@ -73,11 +92,11 @@ private struct DebugSnapshotModifier: ViewModifier {
 
 private struct Sidebar: View {
     @Bindable var backup: BackupModel
-    @Binding var screen: Screen
+    @Bindable var router: AppRouter
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            List(selection: $screen) {
+            List(selection: $router.screen) {
                 Label("SD Backup", systemImage: "sdcard")
                     .tag(Screen.backup)
                 Label("Folder Sync", systemImage: "arrow.trianglehead.2.clockwise.rotate.90")
@@ -91,7 +110,7 @@ private struct Sidebar: View {
                     } else {
                         ForEach(backup.cards) { card in
                             Button {
-                                screen = .backup
+                                router.screen = .backup
                                 backup.select(card)
                             } label: {
                                 CardRow(card: card, isSelected: backup.selectedCard?.url == card.url)
@@ -107,7 +126,9 @@ private struct Sidebar: View {
             .listStyle(.sidebar)
 
             Divider()
-            SettingsLink {
+            Button {
+                router.openSettings()
+            } label: {
                 HStack(spacing: 9) {
                     Image(systemName: "gearshape")
                     Text("Settings")
@@ -115,14 +136,25 @@ private struct Sidebar: View {
                     Text("⌘,")
                 }
                 .font(Theme.secondary)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(isOnSettings ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 5)
+                .background {
+                    // The same rounded grey as the card rows, since this row is no list row.
+                    if isOnSettings {
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color.primary.opacity(0.08))
+                    }
+                }
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
         }
     }
+
+    private var isOnSettings: Bool { router.screen == .settings }
 }
 
 /// Card rows are plain buttons, so they draw the native-looking selected background
@@ -164,7 +196,7 @@ private struct CardRow: View {
 /// Picks the view for the current phase; its title and detail go into the window's title bar.
 private struct BackupScreen: View {
     @Bindable var model: BackupModel
-    var router: SettingsRouter
+    var router: AppRouter
 
     var body: some View {
         VStack(spacing: 0) {

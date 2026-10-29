@@ -5,7 +5,7 @@ import SwiftUI
 /// then start the scan. Scanning never starts on its own.
 struct ReadyView: View {
     @Bindable var model: BackupModel
-    var router: SettingsRouter
+    var router: AppRouter
 
     private var card: RemovableVolume? { model.selectedCard }
 
