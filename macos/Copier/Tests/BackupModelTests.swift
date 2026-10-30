@@ -312,6 +312,25 @@ struct BackupModelTests {
         #expect(plan.jobs.allSatisfy { $0.destinationFolder.lastPathComponent == "Unknown" })
     }
 
+    @Test("Select all ticks every file, deselect all none")
+    func selectAll() async throws {
+        let fixture = try Fixture(days: Self.twoDays)
+        defer { fixture.remove() }
+        let model = makeModel(fixture)
+        await model.refreshCards()
+        model.startScan()
+        try await wait(for: model, until: isReview)
+
+        let all = model.days.flatMap(\.files).count
+        model.setTickedAll(false)
+        #expect(model.tickedCount == 0)
+        #expect(!model.isAllTicked)
+
+        model.setTickedAll(true)
+        #expect(model.tickedCount == all)
+        #expect(model.isAllTicked)
+    }
+
     @Test("A destination without room blocks the backup")
     func insufficientSpaceBlocks() async throws {
         let fixture = try Fixture(days: Self.twoDays)

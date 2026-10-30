@@ -27,6 +27,12 @@ struct ReviewView: View {
                 HStack(spacing: 12) {
                     CheckedLocationsLine(model: model)
                     Spacer(minLength: 12)
+                    Button(model.isAllTicked ? "Deselect all" : "Select all") {
+                        model.setTickedAll(!model.isAllTicked)
+                    }
+                    .buttonStyle(.borderless)
+                    .font(Theme.secondary)
+                    .fixedSize()
                     structurePicker
                 }
 
@@ -521,6 +527,15 @@ private struct BottomBar: View {
         HStack(spacing: 12) {
             destinationField
 
+            Toggle(
+                "Camera subfolders",
+                isOn: Binding(get: { model.cameraSubfolders }, set: { model.cameraSubfolders = $0 })
+            )
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            .font(Theme.secondary)
+            .fixedSize()
+
             Spacer(minLength: 8)
 
             Text(Format.bytes(model.tickedBytes))
@@ -559,14 +574,9 @@ private struct BottomBar: View {
                     model.setDestination(url)
                 }
             }
-            Divider()
-            Toggle(
-                "Camera subfolders",
-                isOn: Binding(get: { model.cameraSubfolders }, set: { model.cameraSubfolders = $0 })
-            )
         } label: {
             // A macOS menu label shows only its icon and first text, so the free space
-            // and the camera note sit beside the menu, inside the same field.
+            // sits beside the menu, inside the same field.
             Label(model.destination.map(Format.destinationLabel) ?? "Choose a destination", systemImage: "externaldrive")
                 .font(Theme.secondary)
                 .fontWeight(.medium)
@@ -581,10 +591,6 @@ private struct BottomBar: View {
             if let free = model.destinationFreeBytes {
                 Text("\(Format.bytes(free)) free")
                     .monospacedDigit()
-            }
-            // The switch lives in the menu, so the field says when it is on.
-            if model.cameraSubfolders {
-                Text("· per camera")
             }
         }
         .font(Theme.secondary)
