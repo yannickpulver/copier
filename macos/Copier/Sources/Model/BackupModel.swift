@@ -315,6 +315,9 @@ final class BackupModel {
 
     func isTicked(_ file: ReviewFile) -> Bool { ticked.contains(file.id) }
 
+    /// `true` when every listed file is ticked.
+    var isAllTicked: Bool { !filesByURL.isEmpty && ticked.count == filesByURL.count }
+
     func isTicked(day: ReviewDay) -> Bool {
         day.files.contains { ticked.contains($0.id) }
     }
@@ -725,6 +728,13 @@ final class BackupModel {
         } else {
             for file in day.files { ticked.remove(file.id) }
         }
+        rebuildDayOrder()
+        shortfall = nil
+    }
+
+    /// Ticks every listed file, backed-up ones included, or none.
+    func setTickedAll(_ isOn: Bool) {
+        ticked = isOn ? Set(filesByURL.keys) : []
         rebuildDayOrder()
         shortfall = nil
     }
