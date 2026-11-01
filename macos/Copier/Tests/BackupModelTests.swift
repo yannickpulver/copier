@@ -331,6 +331,50 @@ struct BackupModelTests {
         #expect(model.isAllTicked)
     }
 
+    @Test("Select all leaves backed-up files unticked")
+    func selectAllSkipsBackedUp() async throws {
+        let fixture = try Fixture(days: Self.twoDays)
+        defer { fixture.remove() }
+        let library = fixture.root.appendingPathComponent("library/2026.09.18 - Trip")
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        let source = FilesBackedUp(folder: library, names: ["IMG_0001.JPG", "IMG_0002.JPG"])
+        let model = makeModel(fixture, sources: [source])
+        await model.refreshCards()
+        model.startScan()
+        try await wait(for: model, until: isReview)
+
+        let backedUp = model.days.flatMap(\.files).filter { $0.reason == .backedUp }
+        #expect(backedUp.count == 2)
+
+        model.setTickedAll(false)
+        model.setTickedAll(true)
+        #expect(model.isAllTicked)
+        #expect(model.tickedCount == 3)
+        #expect(backedUp.allSatisfy { !model.isTicked($0) })
+
+        // A backed-up file ticked by hand keeps the button on "Deselect all", which clears it too.
+        model.setTicked(backedUp[0], true)
+        #expect(model.isAllTicked)
+        model.setTickedAll(false)
+        #expect(model.tickedCount == 0)
+    }
+
+    @Test("Select all is hidden when everything is backed up")
+    func selectAllHiddenWhenAllBackedUp() async throws {
+        let fixture = try Fixture(days: [("2026-09-18", [("IMG_0001.JPG", 1000)])])
+        defer { fixture.remove() }
+        let library = fixture.root.appendingPathComponent("library")
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        let model = makeModel(fixture, sources: [EverythingBackedUp(folder: library)])
+        await model.refreshCards()
+        model.startScan()
+        try await wait(for: model, until: isReview)
+
+        #expect(!model.canSelectAll)
+        model.setTickedAll(true)
+        #expect(model.tickedCount == 0)
+    }
+
     @Test("A destination without room blocks the backup")
     func insufficientSpaceBlocks() async throws {
         let fixture = try Fixture(days: Self.twoDays)

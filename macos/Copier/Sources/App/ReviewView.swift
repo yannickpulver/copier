@@ -27,12 +27,14 @@ struct ReviewView: View {
                 HStack(spacing: 12) {
                     CheckedLocationsLine(model: model)
                     Spacer(minLength: 12)
-                    Button(model.isAllTicked ? "Deselect all" : "Select all") {
-                        model.setTickedAll(!model.isAllTicked)
+                    if model.canSelectAll {
+                        Button(model.isAllTicked ? "Deselect all" : "Select all") {
+                            model.setTickedAll(!model.isAllTicked)
+                        }
+                        .buttonStyle(.borderless)
+                        .font(Theme.secondary)
+                        .fixedSize()
                     }
-                    .buttonStyle(.borderless)
-                    .font(Theme.secondary)
-                    .fixedSize()
                     structurePicker
                 }
 
