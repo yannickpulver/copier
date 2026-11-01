@@ -239,6 +239,8 @@ final class BackupModel {
     let dependencies: BackupDependencies
     private let effects: any BackupEffects
     private var filesByURL: [URL: MediaFile] = [:]
+    /// Every listed file that is not backed up yet — what "Select all" ticks.
+    private var selectableIDs: Set<URL> = []
     private var work: Task<Void, Never>?
     /// The location probe that is currently running, if any.
     private var locationCheck: Task<Void, Never>?
@@ -315,8 +317,11 @@ final class BackupModel {
 
     func isTicked(_ file: ReviewFile) -> Bool { ticked.contains(file.id) }
 
-    /// `true` when every listed file is ticked.
-    var isAllTicked: Bool { !filesByURL.isEmpty && ticked.count == filesByURL.count }
+    /// `true` when every file that is not backed up yet is ticked.
+    var isAllTicked: Bool { !selectableIDs.isEmpty && selectableIDs.isSubset(of: ticked) }
+
+    /// `false` when everything on the card is backed up — nothing for "Select all" to tick.
+    var canSelectAll: Bool { !selectableIDs.isEmpty }
 
     func isTicked(day: ReviewDay) -> Bool {
         day.files.contains { ticked.contains($0.id) }
@@ -525,6 +530,7 @@ final class BackupModel {
         orderedDays = []
         backedUpOnlyDayIDs = []
         ticked = []
+        selectableIDs = []
         targets = [:]
         splitDayIDs = []
         oneFolderTarget = .new(title: "")
@@ -634,6 +640,7 @@ final class BackupModel {
         }
 
         ticked = Set(days.flatMap(\.newFiles).map(\.id))
+        selectableIDs = Set(days.flatMap(\.files).filter { $0.reason != .backedUp }.map(\.id))
         // Folders sorted on the card already say how the day splits.
         splitDayIDs = Set(days.filter { canSplit($0) && $0.clusters.contains { $0.title != nil } }.map(\.id))
         rebuildDayOrder()
@@ -732,9 +739,9 @@ final class BackupModel {
         shortfall = nil
     }
 
-    /// Ticks every listed file, backed-up ones included, or none.
+    /// Ticks every file that is not backed up yet, or none.
     func setTickedAll(_ isOn: Bool) {
-        ticked = isOn ? Set(filesByURL.keys) : []
+        ticked = isOn ? selectableIDs : []
         rebuildDayOrder()
         shortfall = nil
     }
