@@ -15,6 +15,7 @@
     /// - `COPIER_SYNC_SOURCES=<dir>|<dir>`, `COPIER_SYNC_TARGET=<dir>` — with `sync`, pick these folders first.
     /// - `COPIER_SNAPSHOT_COPY=1` — with `sync`, also run the copy and snapshot it running and done.
     /// - `COPIER_SNAPSHOT_EXPAND=1` — on Review, also select the second day and snapshot `review-open`.
+    /// - `COPIER_SNAPSHOT_SPLIT=1` — with `COPIER_SNAPSHOT_EXPAND=1`, also split that day and snapshot `review-split`.
     /// - `COPIER_FIXTURE_CARD=<dir>` — expose a folder as a card (read in `CopierApp`).
     /// - `COPIER_WINDOW_SIZE=920x620` — force the main window's content size, so a run
     ///   can check the layout at the window's minimum.
@@ -75,6 +76,11 @@
         }
 
         /// With `COPIER_SNAPSHOT_SCAN=1`, also select the second day on Review: `COPIER_SNAPSHOT_EXPAND=1`.
+        static var splitsDay: Bool {
+            let value = environment["COPIER_SNAPSHOT_SPLIT"] ?? ""
+            return value == "1" || value.lowercased() == "true"
+        }
+
         static var expandsDay: Bool {
             let value = environment["COPIER_SNAPSHOT_EXPAND"] ?? ""
             return value == "1" || value.lowercased() == "true"
@@ -189,6 +195,11 @@
                         try? await Task.sleep(for: .seconds(2))
                         model.selectedDayID = model.orderedDays.dropFirst().first?.id ?? model.selectedDayID
                         DebugSupport.snapshot("review-open")
+                        if DebugSupport.splitsDay, let day = model.selectedDay {
+                            try? await Task.sleep(for: .seconds(2))
+                            model.split(day)
+                            DebugSupport.snapshot("review-split")
+                        }
                     }
                 }
             }

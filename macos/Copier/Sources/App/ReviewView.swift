@@ -354,41 +354,17 @@ private struct DayDetail: View {
     private var isSettled: Bool { model.isBackedUpOnly(day) }
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        header
-                        folder
-                        if model.isSplit(day), !isSettled {
-                            VStack(alignment: .leading, spacing: 8) {
-                                ForEach(Array(day.clusters.enumerated()), id: \.element.id) { block, cluster in
-                                    BlockRow(model: model, day: day, block: block, cluster: cluster)
-                                }
-                            }
-                        } else {
-                            ShootGrid(clusters: day.clusters) { cluster in
-                                withAnimation { proxy.scrollTo(cluster.id, anchor: .top) }
-                            }
-                        }
-                    }
-                    .padding(.bottom, 8)
-
-                    ForEach(day.clusters) { cluster in
-                        Section {
-                            ForEach(cluster.files) { file in
-                                FileRow(model: model, file: file)
-                            }
-                            Spacer(minLength: 10)
-                        } header: {
-                            ClusterHeader(cluster: cluster)
-                                .id(cluster.id)
-                        }
-                    }
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 12) {
+                header
+                folder
+                    .padding(.bottom, 4)
+                let isSplit = model.isSplit(day) && !isSettled
+                ForEach(Array(day.clusters.enumerated()), id: \.element.id) { block, cluster in
+                    ShootSection(model: model, day: day, cluster: cluster, block: isSplit ? block : nil)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 14)
             }
+            .padding(16)
         }
     }
 
@@ -444,7 +420,7 @@ private struct DayDetail: View {
                 .font(Theme.secondary)
                 .foregroundStyle(.secondary)
         } else if !model.isSplit(day) {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 8) {
                 FolderField(model: model, day: day)
                 if let note {
                     HStack(spacing: 8) {
@@ -477,70 +453,6 @@ private struct DayDetail: View {
         let range = Format.timeRange(day.files.map(\.file))
         let counts = isSettled ? day.backedUpNote : day.countsNote
         return [counts, range].filter { !$0.isEmpty }.joined(separator: " · ")
-    }
-}
-
-/// The shoots of a day as larger previews; a click jumps to the shoot's files.
-private struct ShootGrid: View {
-    let clusters: [FileCluster]
-    let onPick: (FileCluster) -> Void
-
-    var body: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 132, maximum: 180), spacing: 10, alignment: .topLeading)], alignment: .leading, spacing: 10) {
-            ForEach(clusters) { cluster in
-                Button {
-                    onPick(cluster)
-                } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        if let file = cluster.previewFile {
-                            Thumbnail(file: file, size: CGSize(width: 132, height: 88))
-                        } else {
-                            RoundedRectangle(cornerRadius: 4).fill(.quaternary)
-                                .frame(width: 132, height: 88)
-                        }
-                        Text("\(Format.span(from: cluster.start, to: cluster.end)) · \(Format.count(cluster.files.count))")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                            .lineLimit(1)
-                        if let title = cluster.title {
-                            Label(title, systemImage: "folder")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                    }
-                    .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .help("Show these files")
-            }
-        }
-    }
-}
-
-/// One time block of a split day: its preview, time span and its own folder field.
-private struct BlockRow: View {
-    @Bindable var model: BackupModel
-    let day: ReviewDay
-    let block: Int
-    let cluster: FileCluster
-
-    var body: some View {
-        HStack(spacing: 10) {
-            if let file = cluster.previewFile { Thumbnail(file: file) }
-            VStack(alignment: .leading, spacing: 1) {
-                Text(Format.span(from: cluster.start, to: cluster.end))
-                    .font(Theme.secondary)
-                    .monospacedDigit()
-                Text("\(Format.count(cluster.files.count)) file\(cluster.files.count == 1 ? "" : "s")")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-            .fixedSize()
-            FolderField(model: model, day: day, block: block)
-        }
     }
 }
 
@@ -595,35 +507,60 @@ private struct KindCounts: View {
 
 // MARK: - Files
 
-/// `10:00 – 10:42 · 18 files`, pinned while its cluster scrolls past.
-private struct ClusterHeader: View {
+/// One shoot of the day in its own box: its preview, time span and size on top, its
+/// files below. A shoot of a split day names its own folder in the header.
+private struct ShootSection: View {
+    @Bindable var model: BackupModel
+    let day: ReviewDay
     let cluster: FileCluster
+    /// The block of a split day; `nil` when the day goes into one folder.
+    let block: Int?
 
     var body: some View {
-        HStack(spacing: 8) {
-            Text(Format.span(from: cluster.start, to: cluster.end))
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
-            Text("·")
-                .font(.system(size: 11))
-                .foregroundStyle(.tertiary)
-            Text("\(Format.count(cluster.files.count)) file\(cluster.files.count == 1 ? "" : "s")")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
-            if let title = cluster.title {
-                Label(title, systemImage: "folder")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+        GroupedBox {
+            HStack(alignment: .center, spacing: 12) {
+                if let file = cluster.previewFile {
+                    Thumbnail(file: file, size: CGSize(width: 84, height: 56))
+                } else {
+                    RoundedRectangle(cornerRadius: 4).fill(.quaternary)
+                        .frame(width: 84, height: 56)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(Format.span(from: cluster.start, to: cluster.end))
+                        .font(Theme.bodySemibold)
+                        .monospacedDigit()
+                    Text(summary)
+                        .font(Theme.secondary)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                    if let title = cluster.title {
+                        Label(title, systemImage: "folder")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                .fixedSize()
+                Spacer(minLength: 8)
+                if let block {
+                    FolderField(model: model, day: day, block: block)
+                        .frame(maxWidth: 320)
+                }
             }
-            Spacer(minLength: 0)
+            .padding(10)
+
+            ForEach(cluster.files) { file in
+                Divider().padding(.leading, file.id == cluster.files.first?.id ? 0 : 38)
+                FileRow(model: model, file: file)
+            }
         }
-        .padding(.top, 8)
-        .padding(.bottom, 4)
-        .background(Theme.surface)
-        .overlay(alignment: .bottom) { Divider() }
+    }
+
+    /// `12 files · 340 MB`.
+    private var summary: String {
+        let count = cluster.files.count
+        let bytes = cluster.files.reduce(Int64(0)) { $0 + $1.file.size }
+        return "\(Format.count(count)) file\(count == 1 ? "" : "s") · \(Format.bytes(bytes))"
     }
 }
 
@@ -674,7 +611,8 @@ private struct FileRow: View {
                 .monospacedDigit()
                 .frame(width: 70, alignment: .trailing)
         }
-        .frame(height: 24)
+        .padding(.horizontal, 12)
+        .frame(height: 30)
         // A click anywhere but the checkbox shows the file on the card in Finder.
         .contentShape(.rect)
         .onTapGesture { NSWorkspace.shared.activateFileViewerSelecting([file.file.url]) }
