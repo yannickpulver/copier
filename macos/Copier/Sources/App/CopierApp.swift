@@ -35,7 +35,7 @@ struct CopierApp: App {
     var body: some Scene {
         Window("Copier", id: "main") {
             RootView(backup: backup, sync: sync, settings: settings, router: router, updater: updater)
-                .frame(minWidth: 920, minHeight: 620)
+                .frame(minWidth: 920, minHeight: 460)
                 .onChange(of: settings.appearance, initial: true) { _, appearance in
                     NSApp.appearance = appearance.nsAppearance
                 }
@@ -50,7 +50,7 @@ struct CopierApp: App {
                     }
                 }
         }
-        .defaultSize(width: 1040, height: 700)
+        .defaultSize(width: 1040, height: 560)
         .commands {
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") { updater.checkForUpdates() }

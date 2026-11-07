@@ -26,7 +26,6 @@ struct TransferPlannerTests {
         let files = [file("a.jpg", day: "2026-09-17"), file("b.jpg", day: "2026-09-18")]
         let plan = TransferPlanner.plan(
             files: files,
-            structure: .folderPerDay,
             targets: [dayOne: .new(title: "Trip"), dayTwo: .new(title: "")],
             destination: destination
         )
@@ -43,7 +42,6 @@ struct TransferPlannerTests {
     func customFormat() {
         let plan = TransferPlanner.plan(
             files: [file("a.jpg", day: "2026-09-17")],
-            structure: .folderPerDay,
             targets: [dayOne: .new(title: "Trip")],
             destination: destination,
             dateFormat: "YY-MM-DD"
@@ -56,40 +54,12 @@ struct TransferPlannerTests {
         let existing = URL(fileURLWithPath: "/Volumes/SSD/Photos/2026.09.17 - Old trip")
         let plan = TransferPlanner.plan(
             files: [file("a.jpg", day: "2026-09-17")],
-            structure: .folderPerDay,
             targets: [dayOne: .existing(existing)],
             destination: destination
         )
         #expect(plan.folders[0].url == existing)
         #expect(plan.folders[0].isNew == false)
         #expect(plan.jobs[0].destinationFolder == existing)
-    }
-
-    @Test("one folder takes its date from the first day")
-    func oneFolder() {
-        let files = [file("b.jpg", day: "2026-09-18"), file("a.jpg", day: "2026-09-17")]
-        let plan = TransferPlanner.plan(
-            files: files,
-            structure: .oneFolder,
-            targets: [dayOne: .new(title: "Trip")],
-            destination: destination
-        )
-        #expect(plan.folders.count == 1)
-        #expect(plan.folders[0].url.lastPathComponent == "2026.09.17 - Trip")
-        #expect(plan.jobs.count == 2)
-        #expect(Set(plan.jobs.map(\.destinationFolder)).count == 1)
-    }
-
-    @Test("one folder into an existing folder")
-    func oneFolderExisting() {
-        let existing = URL(fileURLWithPath: "/Volumes/SSD/Photos/Everything")
-        let plan = TransferPlanner.plan(
-            files: [file("a.jpg", day: "2026-09-17"), file("b.jpg", day: "2026-09-18")],
-            structure: .oneFolder,
-            targets: [dayOne: .existing(existing)],
-            destination: destination
-        )
-        #expect(plan.jobs.filter { $0.destinationFolder == existing }.count == plan.jobs.count)
     }
 
     @Test("camera subfolders nest inside the day folder")
@@ -101,7 +71,6 @@ struct TransferPlannerTests {
         ]
         let plan = TransferPlanner.plan(
             files: files,
-            structure: .folderPerDay,
             targets: [dayOne: .new(title: "Trip")],
             destination: destination,
             cameraSubfolders: true
@@ -132,7 +101,7 @@ struct TransferPlannerTests {
 
     @Test("no files means no jobs")
     func empty() {
-        let plan = TransferPlanner.plan(files: [], structure: .folderPerDay, targets: [:], destination: destination)
+        let plan = TransferPlanner.plan(files: [], targets: [:], destination: destination)
         #expect(plan.jobs.isEmpty)
         #expect(plan.folders.isEmpty)
     }

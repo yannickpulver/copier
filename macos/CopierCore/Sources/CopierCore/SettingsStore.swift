@@ -22,7 +22,6 @@ public final class SettingsStore: @unchecked Sendable {
         public static let syncTarget = "copier.syncTarget"
         public static let syncAppendSourceName = "copier.syncAppendSourceName"
         public static let cameraSubfolders = "copier.cameraSubfolders"
-        public static let structure = "copier.structure"
         public static let appearance = "copier.appearance"
     }
 
@@ -125,12 +124,6 @@ public final class SettingsStore: @unchecked Sendable {
         set { defaults.set(newValue, forKey: Key.cameraSubfolders) }
     }
 
-    /// Folder-per-day or one folder; defaults to folder-per-day.
-    public var structure: Structure {
-        get { Structure(rawValue: defaults.string(forKey: Key.structure) ?? "") ?? .folderPerDay }
-        set { defaults.set(newValue.rawValue, forKey: Key.structure) }
-    }
-
     // MARK: Folder Sync
 
     public var syncTarget: String? {
@@ -150,7 +143,7 @@ public final class SettingsStore: @unchecked Sendable {
             Key.checkPaths, Key.transferDestinations, Key.selectedDestination,
             Key.synologyHost, Key.synologyPort, Key.synologyUser, Key.synologyPassword,
             Key.synologySecure, Key.synologyFolders, Key.dateFormat, Key.folderSeparator,
-            Key.syncTarget, Key.syncAppendSourceName, Key.cameraSubfolders, Key.structure,
+            Key.syncTarget, Key.syncAppendSourceName, Key.cameraSubfolders,
         ]
         for key in keys { defaults.removeObject(forKey: key) }
     }
