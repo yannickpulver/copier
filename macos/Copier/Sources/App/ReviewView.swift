@@ -13,30 +13,17 @@ extension FileKind {
     }
 }
 
-/// Screen 2 — what will be copied where. What was checked, the days (all collapsed at
-/// first, backed-up days folded into one row) and the bottom bar with the destination,
-/// total and the primary action.
+/// Screen 2 — what will be copied where. The days on the left, newest first; the day
+/// picked there on the right with its folder, shoots and files; the destination, total
+/// and the primary action at the bottom.
 struct ReviewView: View {
     @Bindable var model: BackupModel
-    /// Whether the folded "already backed up" days are shown.
-    @State private var showsBackedUpDays = false
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 12) {
-                    CheckedLocationsLine(model: model)
-                    Spacer(minLength: 12)
-                    if model.canSelectAll {
-                        Button(model.isAllTicked ? "Deselect all" : "Select all") {
-                            model.setTickedAll(!model.isAllTicked)
-                        }
-                        .buttonStyle(.borderless)
-                        .font(Theme.secondary)
-                        .fixedSize()
-                    }
-                    structurePicker
-                }
+            VStack(alignment: .leading, spacing: 10) {
+                CheckedLocationsLine(model: model)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
                 ForEach(model.failedSources, id: \.name) { source in
                     InlineBanner(
@@ -50,40 +37,39 @@ struct ReviewView: View {
                 if model.allBackedUp {
                     allBackedUpNotice
                 }
-
-                if model.structure == .oneFolder {
-                    oneFolderCard
-                }
-
-                GroupedBox { days }
             }
-            .padding(.horizontal, 22)
-            .padding(.top, 14)
-            .padding(.bottom, 14)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+
+            Divider()
+
+            HStack(spacing: 0) {
+                DayList(model: model)
+                    .frame(width: 260)
+                Divider()
+                if let day = model.selectedDay {
+                    DayDetail(model: model, day: day)
+                        .id(day.id)
+                } else {
+                    Text("Pick a day on the left.")
+                        .font(Theme.secondary)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .frame(maxHeight: .infinity)
 
             if let shortfall = model.shortfall {
                 InlineBanner(
                     kind: .error,
                     message: "Not enough space on \(shortfall.destination.lastPathComponent): \(Format.bytes(shortfall.shortfallBytes)) short of the \(Format.bytes(shortfall.requiredBytes)) needed."
                 )
-                .padding(.horizontal, 22)
-                .padding(.bottom, 10)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
             }
 
             BottomBar(model: model)
         }
-    }
-
-    private var structurePicker: some View {
-        Picker("", selection: Binding(get: { model.structure }, set: { model.structure = $0 })) {
-            Text("Folder per day").tag(Structure.folderPerDay)
-            Text("One folder").tag(Structure.oneFolder)
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .fixedSize()
-        .font(Theme.secondary)
     }
 
     private var allBackedUpNotice: some View {
@@ -95,109 +81,378 @@ struct ReviewView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Everything on this card is already backed up")
                         .font(Theme.bodySemibold)
-                    Text("Tick files below to copy them again.")
+                    Text("Tick files to copy them again.")
                         .font(Theme.secondary)
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)
                 Button("Eject card") { model.ejectCard() }
             }
-            .padding(14)
+            .padding(12)
         }
     }
+}
 
-    private var oneFolderCard: some View {
-        GroupedBox {
-            HStack(spacing: 12) {
-                Text("One folder for all \(Format.count(model.tickedCount)) files")
-                    .font(Theme.bodySemibold)
-                    .fixedSize()
-                if let first = model.days.first {
-                    FolderField(model: model, day: first)
+// MARK: - Day list
+
+/// The days, newest first under month headers. Days that share a folder sit together in
+/// one frame; the fully backed-up days fold into one row at the end.
+private struct DayList: View {
+    @Bindable var model: BackupModel
+    @State private var showsBackedUpDays = false
+
+    var body: some View {
+        let groups = model.folderGroups
+        let active = model.orderedDays.filter { !model.isBackedUpOnly($0) }
+        let settled = model.orderedDays.filter { model.isBackedUpOnly($0) }
+        let joinable = model.joinableDays
+
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                if model.canSelectAll {
+                    quickPicks
                 }
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-        }
-    }
-
-    // MARK: Day list
-
-    /// Collapsed days hug their rows and scroll once they outgrow the window. An open day
-    /// fills the space under the other days while that leaves it `FileList.minHeight`; past
-    /// that the day list scrolls and the file list keeps a fixed height, so the other days
-    /// stay one scroll away.
-    @ViewBuilder private var days: some View {
-        if model.expandedDayID == nil {
-            ViewThatFits(in: .vertical) {
-                dayList(fileListHeight: nil)
-                ScrollView { dayList(fileListHeight: nil) }
-            }
-        } else {
-            GeometryReader { geometry in
-                ViewThatFits(in: .vertical) {
-                    dayList(fileListHeight: nil)
-                    ScrollViewReader { proxy in
-                        ScrollView {
-                            dayList(fileListHeight: max(FileList.minHeight, geometry.size.height * 0.6))
+                if joinable.count > 1 {
+                    joinBar(joinable)
+                }
+                ForEach(items(active: active, groups: groups)) { item in
+                    switch item {
+                    case let .month(title):
+                        Text(title.uppercased())
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .tracking(0.4)
+                            .foregroundStyle(.tertiary)
+                            .padding(.horizontal, 14)
+                            .padding(.top, 10)
+                            .padding(.bottom, 3)
+                    case let .day(day):
+                        DayRow(model: model, day: day)
+                    case let .group(days):
+                        GroupFrame(model: model, days: days)
+                    }
+                }
+                if !settled.isEmpty {
+                    BackedUpDaysRow(days: settled, isOpen: $showsBackedUpDays)
+                        .padding(.top, 4)
+                    if showsBackedUpDays {
+                        ForEach(settled) { day in
+                            DayRow(model: model, day: day, isSettled: true)
                         }
-                        .onAppear { scroll(proxy, to: model.expandedDayID) }
-                        .onChange(of: model.expandedDayID) { _, id in scroll(proxy, to: id) }
                     }
                 }
+            }
+            .padding(.bottom, 8)
+        }
+        .background(Theme.surface)
+    }
+
+    /// `Since last backup` · `All new`: tapping the ticked choice again clears it.
+    private var quickPicks: some View {
+        HStack(spacing: 6) {
+            if model.hasBackedUpDays {
+                Chip(title: "Since last backup", isOn: model.isSinceLastBackupTicked) {
+                    if model.isSinceLastBackupTicked { model.setTickedAll(false) } else { model.tickSinceLastBackup() }
+                }
+            }
+            Chip(title: "All new", isOn: model.isAllTicked && !model.isSinceLastBackupTicked) {
+                model.setTickedAll(!model.isAllTicked || model.isSinceLastBackupTicked)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 10)
+        .padding(.bottom, 2)
+    }
+
+    private func joinBar(_ days: [ReviewDay]) -> some View {
+        HStack(spacing: 8) {
+            Text("\(days.count) days ticked")
+                .font(Theme.secondary)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 4)
+            Button("One folder") {
+                withAnimation(.snappy(duration: 0.2)) { model.join(days) }
+            }
+            .controlSize(.small)
+            .help("Put these days into one folder, dated after the first of them")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.quaternary.opacity(0.5), in: .rect(cornerRadius: 8))
+        .padding(.horizontal, 8)
+        .padding(.top, 8)
+    }
+
+    private enum Item: Identifiable {
+        case month(String)
+        case day(ReviewDay)
+        case group([ReviewDay])
+
+        var id: String {
+            switch self {
+            case let .month(title): return "month-\(title)"
+            case let .day(day): return day.id
+            case let .group(days): return "group-\(days.map(\.id).joined(separator: ","))"
             }
         }
     }
 
-    private func scroll(_ proxy: ScrollViewProxy, to id: String?) {
-        guard let id else { return }
-        withAnimation { proxy.scrollTo(id, anchor: .top) }
-    }
-
-    /// Days with something to copy, then one row for the fully backed-up days, which
-    /// unfolds into their own rows.
-    /// - Parameter fileListHeight: a fixed height for the open day's files; `nil` lets them
-    ///   take the space left under the other days.
-    private func dayList(fileListHeight: CGFloat?) -> some View {
-        // `orderedDays` keeps the backed-up days at the end.
-        let split = model.orderedDays.firstIndex { model.isBackedUpOnly($0) } ?? model.orderedDays.count
-        let active = model.orderedDays[..<split]
-        let settled = model.orderedDays[split...]
-        return VStack(spacing: 0) {
-            ForEach(Array(active.enumerated()), id: \.element.id) { index, day in
-                if index > 0 { Divider() }
-                dayBlock(day, isSettled: false, fileListHeight: fileListHeight)
+    /// Month headers, rows and group frames in list order. A group sits where its newest
+    /// day would.
+    private func items(active: [ReviewDay], groups: [[ReviewDay]]) -> [Item] {
+        var result: [Item] = []
+        var month: String?
+        var placed: Set<String> = []
+        for day in active where !placed.contains(day.id) {
+            let title = Format.month(day.day)
+            if title != month {
+                month = title
+                result.append(.month(title))
             }
-            if !settled.isEmpty {
-                if !active.isEmpty { Divider() }
-                BackedUpDaysRow(days: Array(settled), isOpen: $showsBackedUpDays)
-                if showsBackedUpDays {
-                    ForEach(settled) { day in
-                        Divider()
-                        dayBlock(day, isSettled: true, fileListHeight: fileListHeight)
-                    }
-                }
+            if let group = groups.first(where: { $0.contains { $0.id == day.id } }) {
+                result.append(.group(group))
+                placed.formUnion(group.map(\.id))
+            } else {
+                result.append(.day(day))
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: model.expandedDayID == nil ? nil : .infinity, alignment: .top)
+        return result
+    }
+}
+
+/// A rounded toggle button for the quick picks above the list.
+private struct Chip: View {
+    let title: String
+    let isOn: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 11, weight: .medium))
+                .padding(.horizontal, 9)
+                .padding(.vertical, 3)
+                .foregroundStyle(isOn ? AnyShapeStyle(Color.primary) : AnyShapeStyle(.secondary))
+                .background(isOn ? Color.accentColor.opacity(0.2) : .clear, in: .capsule)
+                .overlay(Capsule().strokeBorder(isOn ? Color.accentColor.opacity(0.6) : Theme.hairline))
+                .contentShape(.capsule)
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+    }
+}
+
+/// Days that share one folder: the folder on top, the days below it.
+private struct GroupFrame: View {
+    @Bindable var model: BackupModel
+    let days: [ReviewDay]
+
+    var body: some View {
+        let continues = days.contains { model.continuedDayIDs.contains($0.id) }
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: "folder")
+                    .font(.system(size: 10))
+                Text(days.first.map(model.folderName(for:)) ?? "")
+                    .font(.system(size: 11, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 4)
+                Button("Separate") {
+                    if let first = days.first {
+                        withAnimation(.snappy(duration: 0.2)) { model.separate(first) }
+                    }
+                }
+                .buttonStyle(.link)
+                .font(.system(size: 11))
+                .help("Give each day its own folder again")
+            }
+            .foregroundStyle(Color.accentColor)
+            .padding(.horizontal, 8)
+            .padding(.top, 6)
+            if continues {
+                Text("Continues your last backup")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.top, 1)
+            }
+            ForEach(days) { day in
+                DayRow(model: model, day: day, isGrouped: true)
+            }
+            .padding(.horizontal, -6)
+        }
+        .padding(.bottom, 2)
+        .background(Color.accentColor.opacity(0.06), in: .rect(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.accentColor.opacity(0.4)))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+    }
+}
+
+/// One day: checkbox, date, where it goes (or when it was taken) and how many are new.
+private struct DayRow: View {
+    @Bindable var model: BackupModel
+    let day: ReviewDay
+    /// A day with nothing to copy: greyed.
+    var isSettled: Bool = false
+    /// Inside a group frame, which already names the folder.
+    var isGrouped: Bool = false
+
+    var body: some View {
+        let isTicked = model.isTicked(day: day)
+        let isSelected = model.selectedDayID == day.id
+        HStack(spacing: 9) {
+            Toggle("", isOn: Binding(get: { isTicked }, set: { model.setTicked(day: day, $0) }))
+                .labelsHidden()
+                .toggleStyle(.checkbox)
+                .accessibilityLabel("Include \(Format.day(day.day))")
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(Format.shortDay(day.day))
+                    .font(isTicked ? Theme.bodySemibold : Theme.body)
+                    .foregroundStyle(isTicked ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                Text(detail(isTicked: isTicked))
+                    .font(.system(size: 10.5, design: isTicked && !isGrouped ? .monospaced : .default))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .monospacedDigit()
+            }
+
+            Spacer(minLength: 4)
+
+            Text(Format.count(isSettled ? day.files.count : day.newFiles.count))
+                .font(Theme.secondary)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(isSelected ? Color.accentColor.opacity(0.22) : .clear, in: .rect(cornerRadius: 6))
+        .contentShape(.rect)
+        .onTapGesture { model.selectedDayID = day.id }
+        .padding(.horizontal, 6)
+        .opacity(isSettled ? 0.6 : 1)
     }
 
-    private func dayBlock(_ day: ReviewDay, isSettled: Bool, fileListHeight: CGFloat?) -> some View {
-        let isExpanded = model.expandedDayID == day.id
-        return VStack(spacing: 0) {
-            DayHeaderRow(model: model, day: day, isExpanded: isExpanded, isSettled: isSettled)
-            if model.isSplit(day), !isSettled, model.structure == .folderPerDay {
+    /// The folder a ticked day goes into, otherwise its time span.
+    private func detail(isTicked: Bool) -> String {
+        let range = Format.timeRange(day.files.map(\.file))
+        guard isTicked, !isSettled, !isGrouped else { return range.isEmpty ? " " : range }
+        if model.isSplit(day) { return "\(day.clusters.count) folders" }
+        return model.folderName(for: day)
+    }
+}
+
+// MARK: - Day detail
+
+/// The picked day: its folder, what kinds of files it holds, its shoots and its files.
+private struct DayDetail: View {
+    @Bindable var model: BackupModel
+    let day: ReviewDay
+
+    private var isSettled: Bool { model.isBackedUpOnly(day) }
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 12) {
+                header
+                folder
+                    .padding(.bottom, 4)
+                let isSplit = model.isSplit(day) && !isSettled
                 ForEach(Array(day.clusters.enumerated()), id: \.element.id) { block, cluster in
-                    BlockRow(model: model, day: day, block: block, cluster: cluster)
+                    ShootSection(model: model, day: day, cluster: cluster, block: isSplit ? block : nil)
                 }
             }
-            if isExpanded {
-                Divider()
-                FileList(model: model, day: day, height: fileListHeight)
+            .padding(16)
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            Toggle(
+                "",
+                isOn: Binding(get: { model.isTicked(day: day) }, set: { model.setTicked(day: day, $0) })
+            )
+            .labelsHidden()
+            .toggleStyle(.checkbox)
+            .accessibilityLabel("Include \(Format.day(day.day))")
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(Format.dayWithWeekday(day.day))
+                    .font(.system(size: 15, weight: .semibold))
+                Text(detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .help(isSettled ? day.placesDetail : "")
+            }
+
+            Spacer(minLength: 8)
+
+            if !isSettled {
+                if model.isSplit(day) {
+                    Button {
+                        model.merge(day)
+                    } label: {
+                        Label("Merge", systemImage: "arrow.triangle.merge")
+                    }
+                    .controlSize(.small)
+                    .help("Put the whole day back into one folder")
+                } else if model.canSplit(day), model.isTicked(day: day) {
+                    Button {
+                        model.split(day)
+                    } label: {
+                        Label("Split into \(day.clusters.count) folders", systemImage: "scissors")
+                    }
+                    .controlSize(.small)
+                    .help("One folder per shoot")
+                }
             }
         }
-        .frame(maxHeight: isExpanded ? .infinity : nil)
-        .id(day.id)
+    }
+
+    @ViewBuilder private var folder: some View {
+        if isSettled {
+            EmptyView()
+        } else if !model.isTicked(day: day) {
+            Text("Tick this day to back it up.")
+                .font(Theme.secondary)
+                .foregroundStyle(.secondary)
+        } else if !model.isSplit(day) {
+            VStack(alignment: .leading, spacing: 8) {
+                FolderField(model: model, day: day)
+                if let note {
+                    HStack(spacing: 8) {
+                        Text(note)
+                            .font(Theme.secondary)
+                            .foregroundStyle(.secondary)
+                        Button("Separate") {
+                            withAnimation(.snappy(duration: 0.2)) { model.separate(day) }
+                        }
+                        .buttonStyle(.link)
+                        .font(Theme.secondary)
+                    }
+                }
+            }
+        }
+        KindCounts(counts: day.kindCounts)
+            .opacity(isSettled ? 0.55 : 1)
+    }
+
+    /// Why this day shares its folder: it continues the last backup, or it was joined.
+    private var note: String? {
+        if model.continuedDayIDs.contains(day.id) { return "Continues your last backup" }
+        guard let group = model.group(of: day) else { return nil }
+        let others = group.filter { $0.id != day.id }.map { Format.shortDay($0.day) }
+        return "Shared with \(others.formatted(.list(type: .and)))"
+    }
+
+    /// `82 new · 3 backed up · 10:00–15:00`, or where a fully backed-up day was found.
+    private var detail: String {
+        let range = Format.timeRange(day.files.map(\.file))
+        let counts = isSettled ? day.backedUpNote : day.countsNote
+        return [counts, range].filter { !$0.isEmpty }.joined(separator: " · ")
     }
 }
 
@@ -228,152 +483,6 @@ private struct BackedUpDaysRow: View {
     private var files: Int { days.reduce(0) { $0 + $1.files.count } }
 }
 
-// MARK: - Day header
-
-/// One day: checkbox, previews, date with its counts and times, and its folder. The
-/// kind counts and the split button only show while the day is open.
-private struct DayHeaderRow: View {
-    @Bindable var model: BackupModel
-    let day: ReviewDay
-    let isExpanded: Bool
-    /// A day with nothing to copy: greyed, no folder field.
-    var isSettled: Bool = false
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Toggle(
-                "",
-                isOn: Binding(
-                    get: { model.isTicked(day: day) },
-                    set: { model.setTicked(day: day, $0) }
-                )
-            )
-            .labelsHidden()
-            .toggleStyle(.checkbox)
-            .accessibilityLabel("Include \(Format.day(day.day))")
-
-            if !isShowingBlocks {
-                HStack(spacing: 3) {
-                    ForEach(day.clusters) { cluster in
-                        if let file = cluster.previewFile { Thumbnail(file: file) }
-                    }
-                }
-                .opacity(isSettled ? 0.55 : 1)
-            }
-
-            Button {
-                model.expandedDayID = isExpanded ? nil : day.id
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.secondary)
-                        // Both chevrons get the same width, so the date does not shift.
-                        .frame(width: 10)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(Format.dayWithWeekday(day.day))
-                            .font(Theme.bodySemibold)
-                            .foregroundStyle(isSettled ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
-                        Text(detail)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                            .help(isSettled ? day.placesDetail : "")
-                    }
-                }
-                .fixedSize()
-                .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-
-            if isExpanded {
-                // The counts are the first thing to give way in a narrow window.
-                ViewThatFits(in: .horizontal) {
-                    KindCounts(counts: day.kindCounts)
-                    EmptyView()
-                }
-                .opacity(isSettled ? 0.55 : 1)
-            }
-
-            Spacer(minLength: 8)
-
-            if !isSettled, model.structure == .folderPerDay {
-                if model.isSplit(day) {
-                    Text("\(day.clusters.count) shoots")
-                        .font(Theme.secondary)
-                        .foregroundStyle(.secondary)
-                        .fixedSize()
-                    Button {
-                        model.merge(day)
-                    } label: {
-                        Label("Merge", systemImage: "arrow.triangle.merge")
-                            .font(Theme.secondary)
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Put the whole day back into one folder")
-                    .fixedSize()
-                } else {
-                    FolderField(model: model, day: day)
-                        .frame(maxWidth: 360)
-                    if isExpanded, model.canSplit(day) {
-                        Button {
-                            model.split(day)
-                        } label: {
-                            Image(systemName: "scissors")
-                                .font(.system(size: 12))
-                        }
-                        .buttonStyle(.borderless)
-                        .help("Split into \(day.clusters.count) shoots, one folder each")
-                        .accessibilityLabel("Split day")
-                    }
-                }
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-    }
-
-    /// `82 new · 3 backed up · 10:00–15:00`, or where a fully backed-up day was found.
-    private var detail: String {
-        let range = Format.timeRange(day.files.map(\.file))
-        let counts = isSettled ? day.backedUpNote : day.countsNote
-        return [counts, range].filter { !$0.isEmpty }.joined(separator: " · ")
-    }
-
-    /// A split day lists its blocks below, each with its own thumbnail.
-    private var isShowingBlocks: Bool {
-        model.isSplit(day) && !isSettled && model.structure == .folderPerDay
-    }
-}
-
-/// One time block of a split day: its time span and its own folder field.
-private struct BlockRow: View {
-    @Bindable var model: BackupModel
-    let day: ReviewDay
-    let block: Int
-    let cluster: FileCluster
-
-    var body: some View {
-        HStack(spacing: 10) {
-            if let file = cluster.previewFile { Thumbnail(file: file) }
-            Text(Format.span(from: cluster.start, to: cluster.end))
-                .font(Theme.secondary)
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
-                .fixedSize()
-            Text("\(Format.count(cluster.files.count)) file\(cluster.files.count == 1 ? "" : "s")")
-                .font(Theme.secondary)
-                .foregroundStyle(.tertiary)
-                .monospacedDigit()
-                .fixedSize()
-            FolderField(model: model, day: day, block: block)
-        }
-        .padding(.leading, 42)
-        .padding(.trailing, 14)
-        .padding(.bottom, 7)
-    }
-}
-
 /// `● 112 photos  ● 36 videos` — the colours match the row badges.
 private struct KindCounts: View {
     let counts: [(kind: FileKind, count: Int)]
@@ -396,72 +505,62 @@ private struct KindCounts: View {
     }
 }
 
-// MARK: - File list
+// MARK: - Files
 
-private struct FileList: View {
+/// One shoot of the day in its own box: its preview, time span and size on top, its
+/// files below. A shoot of a split day names its own folder in the header.
+private struct ShootSection: View {
     @Bindable var model: BackupModel
     let day: ReviewDay
-    /// Fixed height, or `nil` to fill what the day list leaves.
-    var height: CGFloat?
-
-    static let minHeight: CGFloat = 200
+    let cluster: FileCluster
+    /// The block of a split day; `nil` when the day goes into one folder.
+    let block: Int?
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                ForEach(day.clusters) { cluster in
-                    Section {
-                        ForEach(cluster.files) { file in
-                            FileRow(model: model, file: file)
-                        }
-                        Spacer(minLength: 10)
-                    } header: {
-                        ClusterHeader(cluster: cluster)
+        GroupedBox {
+            HStack(alignment: .center, spacing: 12) {
+                if let file = cluster.previewFile {
+                    Thumbnail(file: file, size: CGSize(width: 84, height: 56))
+                } else {
+                    RoundedRectangle(cornerRadius: 4).fill(.quaternary)
+                        .frame(width: 84, height: 56)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(Format.span(from: cluster.start, to: cluster.end))
+                        .font(Theme.bodySemibold)
+                        .monospacedDigit()
+                    Text(summary)
+                        .font(Theme.secondary)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                    if let title = cluster.title {
+                        Label(title, systemImage: "folder")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
                     }
                 }
+                .fixedSize()
+                Spacer(minLength: 8)
+                if let block {
+                    FolderField(model: model, day: day, block: block)
+                        .frame(maxWidth: 320)
+                }
             }
-            .padding(.horizontal, 14)
-            .padding(.bottom, 8)
+            .padding(10)
+
+            ForEach(cluster.files) { file in
+                Divider().padding(.leading, file.id == cluster.files.first?.id ? 0 : 38)
+                FileRow(model: model, file: file)
+            }
         }
-        .frame(
-            maxWidth: .infinity,
-            minHeight: height ?? Self.minHeight,
-            idealHeight: height ?? Self.minHeight,
-            maxHeight: height ?? .infinity
-        )
-        .accessibilityLabel("Files from \(Format.day(day.day))")
     }
-}
 
-/// `10:00 – 10:42 · 18 files`, pinned while its cluster scrolls past.
-private struct ClusterHeader: View {
-    let cluster: FileCluster
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Text(Format.span(from: cluster.start, to: cluster.end))
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
-            Text("·")
-                .font(.system(size: 11))
-                .foregroundStyle(.tertiary)
-            Text("\(Format.count(cluster.files.count)) file\(cluster.files.count == 1 ? "" : "s")")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
-            if let title = cluster.title {
-                Label(title, systemImage: "folder")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.top, 8)
-        .padding(.bottom, 4)
-        .background(Theme.surface)
-        .overlay(alignment: .bottom) { Divider() }
+    /// `12 files · 340 MB`.
+    private var summary: String {
+        let count = cluster.files.count
+        let bytes = cluster.files.reduce(Int64(0)) { $0 + $1.file.size }
+        return "\(Format.count(count)) file\(count == 1 ? "" : "s") · \(Format.bytes(bytes))"
     }
 }
 
@@ -512,7 +611,8 @@ private struct FileRow: View {
                 .monospacedDigit()
                 .frame(width: 70, alignment: .trailing)
         }
-        .frame(height: 24)
+        .padding(.horizontal, 12)
+        .frame(height: 30)
         // A click anywhere but the checkbox shows the file on the card in Finder.
         .contentShape(.rect)
         .onTapGesture { NSWorkspace.shared.activateFileViewerSelecting([file.file.url]) }

@@ -204,19 +204,22 @@ final class BackupModel {
 
     // MARK: Review state
 
-    var structure: Structure = .folderPerDay {
-        didSet { dependencies.settings.structure = structure }
-    }
     private(set) var ticked: Set<URL> = []
     /// `days`, but with the days that hold nothing to back up moved to the end.
     /// Rebuilt when the scan lands and whenever ticks change — never in a view body.
     private(set) var orderedDays: [ReviewDay] = []
     private(set) var backedUpOnlyDayIDs: Set<String> = []
-    var expandedDayID: String?
+    /// The day the preview shows.
+    var selectedDayID: String?
     private(set) var targets: [ShootKey: FolderTarget] = [:]
     /// Days the user split into their time blocks — each block gets its own folder.
     private(set) var splitDayIDs: Set<String> = []
-    private(set) var oneFolderTarget: FolderTarget = .new(title: "")
+    /// Day → first day of its group. A day listed here uses that day's folder.
+    private(set) var joins: [String: String] = [:]
+    /// Days that start in the last backup's folder, for the "Continues…" note.
+    private(set) var continuedDayIDs: Set<String> = []
+    /// Days the user took out of the last backup's folder; a rebuild leaves them out.
+    private var separatedDayIDs: Set<String> = []
     private(set) var existingFolderNames: [String] = []
     var cameraSubfolders: Bool = false {
         didSet { dependencies.settings.cameraSubfolders = cameraSubfolders }
@@ -249,7 +252,6 @@ final class BackupModel {
     init(dependencies: BackupDependencies = BackupDependencies(), effects: any BackupEffects = SilentBackupEffects()) {
         self.dependencies = dependencies
         self.effects = effects
-        structure = dependencies.settings.structure
         cameraSubfolders = dependencies.settings.cameraSubfolders
         destination = dependencies.settings.selectedDestination.map { URL(fileURLWithPath: $0) }
             ?? dependencies.settings.transferDestinations.first.map { URL(fileURLWithPath: $0) }
@@ -305,13 +307,11 @@ final class BackupModel {
         return scan.missing.isEmpty && !scan.allFiles.isEmpty
     }
 
-    /// `11 new · 206 backed up · 4 other`.
+    /// `11 new · 206 backed up`.
     var reviewSubtitle: String {
         guard let scan else { return "" }
         var parts = ["\(scan.missing.count) new"]
         if !scan.backedUp.isEmpty { parts.append("\(scan.backedUp.count) backed up") }
-        let other = scan.otherFiles.count
-        if other > 0 { parts.append("\(other) other") }
         return parts.joined(separator: " · ")
     }
 
@@ -333,7 +333,7 @@ final class BackupModel {
         backedUpOnlyDayIDs.contains(day.id)
     }
 
-    /// Days with something to copy first (oldest to newest), fully backed-up days after.
+    /// Days with something to copy first, fully backed-up days after; newest first in both.
     private func rebuildDayOrder() {
         var active: [ReviewDay] = []
         var settled: [ReviewDay] = []
@@ -346,14 +346,37 @@ final class BackupModel {
                 active.append(day)
             }
         }
-        orderedDays = active + settled
+        orderedDays = active.reversed() + settled.reversed()
         backedUpOnlyDayIDs = settledIDs
     }
 
-    /// The target used for a day or block — one folder collapses everything onto one target.
+    /// The target used for a day or block. A joined day uses its group's first day.
     func target(for key: ShootKey) -> FolderTarget {
-        if structure == .oneFolder { return oneFolderTarget }
-        return targets[key] ?? .new(title: "")
+        targets[folderKey(for: key)] ?? .new(title: "")
+    }
+
+    /// Where a key's folder choice lives: a joined day's choice sits with its group's first day.
+    private func folderKey(for key: ShootKey) -> ShootKey {
+        guard key.block == nil, let anchor = joins[Self.id(of: key.day)] else { return key }
+        return ShootKey(day: day(withID: anchor)?.day)
+    }
+
+    /// The day a day's folder takes its date from: the first day of its group.
+    func folderDay(for day: ReviewDay) -> Day? {
+        guard let anchor = joins[day.id] else { return day.day }
+        return self.day(withID: anchor)?.day
+    }
+
+    private static func id(of day: Day?) -> String { day?.isoString ?? "unknown" }
+
+    func day(withID id: String) -> ReviewDay? { days.first { $0.id == id } }
+
+    /// The day the preview shows.
+    var selectedDay: ReviewDay? { selectedDayID.flatMap(day(withID:)) }
+
+    /// The folder a whole day goes into, as it will be named.
+    func folderName(for day: ReviewDay) -> String {
+        folderName(for: folderDay(for: day), target: target(for: day))
     }
 
     func target(for day: ReviewDay) -> FolderTarget {
@@ -362,8 +385,11 @@ final class BackupModel {
 
     func isSplit(_ day: ReviewDay) -> Bool { splitDayIDs.contains(day.id) }
 
-    /// A day only offers a split when its files form more than one time block.
-    func canSplit(_ day: ReviewDay) -> Bool { day.clusters.count > 1 }
+    /// A day only offers a split when its files form more than one time block. A day
+    /// that shares its folder with other days stays whole.
+    func canSplit(_ day: ReviewDay) -> Bool {
+        day.clusters.count > 1 && joins[day.id] == nil && !joins.values.contains(day.id)
+    }
 
     /// The keys a day's folder choices live under: one per block when split.
     private func shootKeys(for day: ReviewDay) -> [ShootKey] {
@@ -371,10 +397,6 @@ final class BackupModel {
         return day.clusters.indices.map { ShootKey(day: day.day, block: $0) }
     }
 
-    /// Day the one-folder name takes its date from: the first ticked day.
-    var oneFolderDay: Day? {
-        days.first(where: { isTicked(day: $0) })?.day ?? days.first?.day
-    }
 
     /// The plan the primary action would run.
     var plan: TransferPlan {
@@ -388,18 +410,15 @@ final class BackupModel {
         )
     }
 
-    /// The ticked files per folder choice: one group per day, per block of a split day,
-    /// or a single group for one folder.
+    /// The ticked files per folder choice: one group per day or per block of a split day.
+    /// Joined days name their group's first day, so the planner puts them into one folder.
     private var planGroups: [PlanGroup] {
         func tickedFiles(_ files: [ReviewFile]) -> [MediaFile] {
             files.filter { ticked.contains($0.id) }.map(\.file)
         }
-        if structure == .oneFolder {
-            return [PlanGroup(day: oneFolderDay, target: oneFolderTarget, files: tickedFiles(days.flatMap(\.files)))]
-        }
         return days.flatMap { day -> [PlanGroup] in
             guard isSplit(day) else {
-                return [PlanGroup(day: day.day, target: target(for: day), files: tickedFiles(day.files))]
+                return [PlanGroup(day: folderDay(for: day), target: target(for: day), files: tickedFiles(day.files))]
             }
             return day.clusters.enumerated().map { block, cluster in
                 PlanGroup(day: day.day, target: target(for: ShootKey(day: day.day, block: block)), files: tickedFiles(cluster.files))
@@ -533,14 +552,16 @@ final class BackupModel {
         selectableIDs = []
         targets = [:]
         splitDayIDs = []
-        oneFolderTarget = .new(title: "")
+        joins = [:]
+        continuedDayIDs = []
+        separatedDayIDs = []
         existingFolderNames = []
         failedSources = []
         shortfall = nil
         progress = nil
         result = nil
         finishedAt = nil
-        expandedDayID = nil
+        selectedDayID = nil
     }
 
     // MARK: - Scanning
@@ -639,23 +660,26 @@ final class BackupModel {
             )
         }
 
-        ticked = Set(days.flatMap(\.newFiles).map(\.id))
+        ticked = sinceLastBackupIDs
         selectableIDs = Set(days.flatMap(\.files).filter { $0.reason != .backedUp }.map(\.id))
         // Folders sorted on the card already say how the day splits.
         splitDayIDs = Set(days.filter { canSplit($0) && $0.clusters.contains { $0.title != nil } }.map(\.id))
         rebuildDayOrder()
-        // Every day starts collapsed, so the screen opens on the overview.
-        expandedDayID = nil
+        // The preview opens on the newest day with something to copy.
+        selectedDayID = orderedDays.first?.id
         rebuildTargets()
         autoEnableCameraSubfolders()
         phase = .review
     }
 
     /// Name each folder after its card folder, or preselect an existing folder per day
-    /// when one with the same date exists. A title the user already typed is kept —
-    /// switching the destination must not wipe it.
+    /// when one with the same date exists. New days right after the last backup start in
+    /// that backup's folder. A title the user already typed is kept — switching the
+    /// destination must not wipe it.
     private func rebuildTargets() {
         let format = dependencies.settings.dateFormat
+        let continuation = continuationFolder
+        var continued: Set<String> = []
         var next: [ShootKey: FolderTarget] = [:]
         for group in days {
             // Folders named after a card folder belong to that block, not the day's first.
@@ -675,15 +699,46 @@ final class BackupModel {
                           let match = FolderNaming.preselectedFolder(in: sameDay, for: day, format: format) {
                     // Only the whole day, or the first block of a split one, picks up the same-day folder.
                     next[key] = .existing(destination.appending(path: match, directoryHint: .notDirectory))
+                } else if key.block == nil, let continuation, continuation.dayIDs.contains(group.id) {
+                    next[key] = .existing(continuation.folder)
+                    continued.insert(group.id)
                 } else {
                     next[key] = .new(title: "")
                 }
             }
         }
         targets = next
-        if !Self.hasTypedTitle(oneFolderTarget) {
-            oneFolderTarget = next[ShootKey(day: oneFolderDay)] ?? .new(title: "")
+        continuedDayIDs = continued
+    }
+
+    /// Two days this far apart or closer still count as the same trip.
+    static let tripGap = 3
+
+    /// The folder the last backup went to, when it exists at the destination, and the new
+    /// days that follow that backup without a gap longer than ``tripGap`` days.
+    private var continuationFolder: (folder: URL, dayIDs: Set<String>)? {
+        guard let destination,
+              let index = days.lastIndex(where: { $0.day != nil && $0.backedUpCount > 0 }),
+              let name = days[index].places.first?.folder.lastPathComponent,
+              existingFolderNames.contains(name)
+        else { return nil }
+        var previous = days[index].day
+        var ids: Set<String> = []
+        for day in days[(index + 1)...] where !day.newFiles.isEmpty {
+            guard let current = day.day, let last = previous,
+                  Self.daysBetween(last, current) <= Self.tripGap else { break }
+            if !separatedDayIDs.contains(day.id) { ids.insert(day.id) }
+            previous = current
         }
+        guard !ids.isEmpty else { return nil }
+        return (destination.appending(path: name, directoryHint: .notDirectory), ids)
+    }
+
+    private static func daysBetween(_ from: Day, _ to: Day) -> Int {
+        let calendar = Calendar(identifier: .gregorian)
+        let start = DateComponents(year: from.year, month: from.month, day: from.day)
+        let end = DateComponents(year: to.year, month: to.month, day: to.day)
+        return calendar.dateComponents([.day], from: start, to: end).day ?? .max
     }
 
     /// The card folder a block came from; a whole day only has one when all of it did.
@@ -746,6 +801,83 @@ final class BackupModel {
         shortfall = nil
     }
 
+    /// `true` once a day on the card has files that are backed up already.
+    var hasBackedUpDays: Bool { days.contains { $0.day != nil && $0.backedUpCount > 0 } }
+
+    /// The new files of the days after the last day with backed-up files; every new
+    /// file when nothing is backed up yet. What a scan ticks first.
+    private var sinceLastBackupIDs: Set<URL> {
+        let start = days.lastIndex { $0.day != nil && $0.backedUpCount > 0 }.map { $0 + 1 } ?? 0
+        return Set(days[start...].flatMap(\.newFiles).map(\.id))
+    }
+
+    /// `true` when exactly the files since the last backup are ticked.
+    var isSinceLastBackupTicked: Bool { !ticked.isEmpty && ticked == sinceLastBackupIDs }
+
+    func tickSinceLastBackup() {
+        ticked = sinceLastBackupIDs
+        rebuildDayOrder()
+        shortfall = nil
+    }
+
+    // MARK: - Day groups
+
+    /// Ticked days that share one folder, newest first: days joined into one folder, days
+    /// that continue the last backup, or days given the same existing folder.
+    var folderGroups: [[ReviewDay]] {
+        var byName: [String: [ReviewDay]] = [:]
+        var names: [String] = []
+        for day in orderedDays where isTicked(day: day) && !isSplit(day) {
+            let name = folderName(for: folderDay(for: day), target: target(for: day))
+            if byName[name] == nil { names.append(name) }
+            byName[name, default: []].append(day)
+        }
+        return names.compactMap { name in byName[name].flatMap { $0.count > 1 ? $0 : nil } }
+    }
+
+    /// The days `day` shares its folder with, itself included; `nil` when it has its own.
+    func group(of day: ReviewDay) -> [ReviewDay]? {
+        folderGroups.first { $0.contains { $0.id == day.id } }
+    }
+
+    /// Ticked, whole days that still have a folder of their own — what "One folder" joins.
+    var joinableDays: [ReviewDay] {
+        let grouped = Set(folderGroups.flatMap { $0.map(\.id) })
+        return orderedDays.filter { isTicked(day: $0) && !isSplit($0) && !grouped.contains($0.id) }
+    }
+
+    /// Put `days` into one folder. It takes the first day's date and the first name
+    /// given to any of them.
+    func join(_ days: [ReviewDay]) {
+        guard days.count > 1, let first = days.min(by: { $0.id < $1.id }) else { return }
+        let firstKey = ShootKey(day: first.day)
+        if !Self.isNamed(target(for: firstKey)),
+           let named = days.map({ target(for: $0) }).first(where: Self.isNamed) {
+            targets[firstKey] = named
+        }
+        for day in days where day.id != first.id { joins[day.id] = first.id }
+        shortfall = nil
+    }
+
+    /// Give every day of `day`'s group its own folder again. Days that continued the last
+    /// backup get a new folder and stay out of it on the next rebuild.
+    func separate(_ day: ReviewDay) {
+        let members = group(of: day) ?? [day]
+        let shared = target(for: day)
+        for member in members {
+            joins[member.id] = nil
+            let key = ShootKey(day: member.day)
+            if continuedDayIDs.remove(member.id) != nil { separatedDayIDs.insert(member.id) }
+            if case .existing = shared, targets[key] == shared { targets[key] = .new(title: "") }
+        }
+        shortfall = nil
+    }
+
+    private static func isNamed(_ target: FolderTarget) -> Bool {
+        if case let .new(title) = target { return !title.isEmpty }
+        return true
+    }
+
     // MARK: - Folder targets
 
     func setTitle(_ title: String, for key: ShootKey) {
@@ -765,11 +897,7 @@ final class BackupModel {
     }
 
     private func setTarget(_ target: FolderTarget, for key: ShootKey) {
-        if structure == .oneFolder {
-            oneFolderTarget = target
-        } else {
-            targets[key] = target
-        }
+        targets[folderKey(for: key)] = target
         shortfall = nil
     }
 

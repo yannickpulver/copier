@@ -275,8 +275,8 @@ struct BackupModelTests {
         #expect(plan.totalBytes == 10000)
     }
 
-    @Test("One folder puts everything into the first day's folder")
-    func oneFolderStructure() async throws {
+    @Test("joined days go into one folder dated after the first day, separate splits them again")
+    func joinedDays() async throws {
         let fixture = try Fixture(days: Self.twoDays)
         defer { fixture.remove() }
         let model = makeModel(fixture)
@@ -284,18 +284,116 @@ struct BackupModelTests {
         model.startScan()
         try await wait(for: model, until: isReview)
 
-        model.structure = .oneFolder
-        model.setTitle("Trip", for: model.days[0])
+        #expect(model.joinableDays.count == 2)
+        // A name typed on any of the days names the shared folder.
+        model.setTitle("Trip", for: model.days[1])
+        model.join(model.days)
 
+        #expect(model.folderGroups.map { $0.map(\.id) } == [["2026-09-19", "2026-09-18"]])
+        #expect(model.joinableDays.isEmpty)
+        #expect(model.folderName(for: model.days[1]) == "2026.09.18 - Trip")
         let plan = model.plan
         #expect(plan.folders.count == 1)
         #expect(plan.folders[0].url.lastPathComponent == "2026.09.18 - Trip")
         #expect(plan.fileCount == 4)
 
+        // Typing on a later day renames the shared folder.
+        model.setTitle("Iceland", for: model.days[1])
+        #expect(model.target(for: model.days[0]) == .new(title: "Iceland"))
+
         // Days are still listed so files can be ticked off.
-        #expect(model.days.count == 2)
         model.setTicked(day: model.days[1], false)
         #expect(model.plan.fileCount == 2)
+        model.setTicked(day: model.days[1], true)
+
+        model.separate(model.days[1])
+        #expect(model.folderGroups.isEmpty)
+        #expect(model.plan.folders.count == 2)
+    }
+
+    @Test("new days right after the last backup start in its folder")
+    func continuesLastBackup() async throws {
+        let fixture = try Fixture(days: [
+            ("2026-09-18", [("IMG_0001.JPG", 1000)]),
+            ("2026-09-19", [("IMG_0002.JPG", 1000)]),
+            ("2026-09-22", [("IMG_0003.JPG", 1000)]),
+            ("2026-09-26", [("IMG_0004.JPG", 1000)]),
+        ])
+        defer { fixture.remove() }
+        let library = fixture.root.appendingPathComponent("library/2026.09.18 - Trip")
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        let trip = fixture.destination.appendingPathComponent("2026.09.18 - Trip")
+        try FileManager.default.createDirectory(at: trip, withIntermediateDirectories: true)
+        let source = FilesBackedUp(folder: library, names: ["IMG_0001.JPG"])
+
+        let model = makeModel(fixture, sources: [source])
+        await model.refreshCards()
+        model.startScan()
+        try await wait(for: model, until: isReview)
+
+        // 19th and 22nd are at most three days apart; the 26th is not.
+        #expect(model.target(for: model.days[1]) == .existing(trip))
+        #expect(model.target(for: model.days[2]) == .existing(trip))
+        #expect(model.target(for: model.days[3]) == .new(title: ""))
+        #expect(model.continuedDayIDs == ["2026-09-19", "2026-09-22"])
+        #expect(model.folderGroups.map { $0.map(\.id) } == [["2026-09-22", "2026-09-19"]])
+        #expect(model.plan.folders.first { $0.url == trip }?.files.count == 2)
+
+        // Separate gives both days a new folder, and a rebuild does not undo that.
+        model.separate(model.days[1])
+        #expect(model.target(for: model.days[1]) == .new(title: ""))
+        #expect(model.target(for: model.days[2]) == .new(title: ""))
+        #expect(model.continuedDayIDs.isEmpty)
+        model.refreshDestinationInfo()
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(model.target(for: model.days[1]) == .new(title: ""))
+    }
+
+    @Test("without the last backup's folder at the destination nothing continues")
+    func noContinuationWithoutFolder() async throws {
+        let fixture = try Fixture(days: [
+            ("2026-09-18", [("IMG_0001.JPG", 1000)]),
+            ("2026-09-19", [("IMG_0002.JPG", 1000)]),
+        ])
+        defer { fixture.remove() }
+        let library = fixture.root.appendingPathComponent("library/2026.09.18 - Trip")
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        let model = makeModel(fixture, sources: [FilesBackedUp(folder: library, names: ["IMG_0001.JPG"])])
+        await model.refreshCards()
+        model.startScan()
+        try await wait(for: model, until: isReview)
+
+        #expect(model.target(for: model.days[1]) == .new(title: ""))
+        #expect(model.continuedDayIDs.isEmpty)
+    }
+
+    @Test("a scan ticks only the days after the last backup")
+    func ticksSinceLastBackup() async throws {
+        let fixture = try Fixture(days: [
+            ("2026-09-17", [("IMG_0001.JPG", 1000)]),
+            ("2026-09-18", [("IMG_0002.JPG", 1000)]),
+            ("2026-09-19", [("IMG_0003.JPG", 1000), ("IMG_0004.JPG", 1000)]),
+        ])
+        defer { fixture.remove() }
+        let library = fixture.root.appendingPathComponent("library/2026.09.18 - Trip")
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        let model = makeModel(fixture, sources: [FilesBackedUp(folder: library, names: ["IMG_0002.JPG"])])
+        await model.refreshCards()
+        model.startScan()
+        try await wait(for: model, until: isReview)
+
+        #expect(model.hasBackedUpDays)
+        #expect(model.tickedCount == 2)
+        #expect(model.isTicked(day: model.days[0]) == false)
+        #expect(model.isSinceLastBackupTicked)
+        // The newest day with something new opens in the preview.
+        #expect(model.selectedDayID == "2026-09-19")
+
+        model.setTickedAll(true)
+        #expect(model.tickedCount == 3)
+        #expect(model.isSinceLastBackupTicked == false)
+        model.tickSinceLastBackup()
+        #expect(model.tickedCount == 2)
     }
 
     @Test("Camera subfolders split the jobs per camera folder")
@@ -405,7 +503,7 @@ struct BackupModelTests {
         #expect(model.tickedCount == 0)
         #expect(model.days.flatMap(\.files).allSatisfy { $0.reason != .new })
         #expect(model.reviewSubtitle.contains("backed up"))
-        #expect(model.expandedDayID == nil)
+        #expect(model.selectedDayID == "2026-09-19")
     }
 
     @Test("A backup copies the ticked files and finishes")
@@ -487,11 +585,12 @@ struct BackupModelTests {
         // A day without a typed name still picks up the new destination's same-day folder.
         #expect(model.target(for: model.days[1]) == .existing(existing))
 
-        model.structure = .oneFolder
-        model.setTitle("Trip", for: model.days[0])
+        // A joined day keeps the shared name too.
+        model.join(model.days)
+        model.setTitle("Trip", for: model.days[1])
         model.setDestination(fixture.destination)
         try await wait(for: model, until: { $0.existingFolderNames.isEmpty })
-        #expect(model.target(for: model.days[0]) == .new(title: "Trip"))
+        #expect(model.target(for: model.days[1]) == .new(title: "Trip"))
     }
 
     @Test("a folder sorted on the card becomes its own block, named after it")
@@ -775,7 +874,7 @@ struct BackupModelTests {
         #expect(model.orderedDays.map(\.id) == ["2026-09-19", "2026-09-18"])
         #expect(model.isBackedUpOnly(model.days[0]))
         #expect(model.isBackedUpOnly(model.days[1]) == false)
-        #expect(model.expandedDayID == nil)
+        #expect(model.selectedDayID == "2026-09-19")
 
         let settled = try #require(model.orderedDays.last)
         // Where: the location and the dated folder above the camera subfolder.
@@ -785,7 +884,7 @@ struct BackupModelTests {
         // Ticking a file in a settled day moves it back into the first block.
         let file = try #require(settled.files.first { $0.reason == .backedUp })
         model.setTicked(file, true)
-        #expect(model.orderedDays.map(\.id) == ["2026-09-18", "2026-09-19"])
+        #expect(model.orderedDays.map(\.id) == ["2026-09-19", "2026-09-18"])
         #expect(model.isBackedUpOnly(settled) == false)
     }
 

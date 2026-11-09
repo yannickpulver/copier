@@ -20,7 +20,7 @@ public struct CopyJob: Sendable, Hashable, Identifiable {
 
 /// A destination folder the plan will write into.
 public struct PlannedFolder: Sendable, Identifiable {
-    /// The day these files came from — `nil` for the one-folder structure or undated files.
+    /// The day these files came from — `nil` for undated files.
     public var day: Day?
     /// The folder itself (without camera subfolders).
     public var url: URL
@@ -70,21 +70,17 @@ public struct PlanGroup: Sendable {
 
 /// Turns the review screen's state into copy jobs.
 public enum TransferPlanner {
-    /// Build the copy jobs.
+    /// Build the copy jobs, one folder per capture day.
     ///
     /// - Parameters:
     ///   - files: the files the user ticked.
-    ///   - structure: folder per day, or everything into one folder.
-    ///   - targets: per-day folder choice. For ``Structure/oneFolder`` the target of
-    ///     the first (oldest) day is used, matching "One folder takes its date from
-    ///     the first day".
+    ///   - targets: per-day folder choice.
     ///   - destination: the destination root a new folder is created in.
     ///   - cameraSubfolders: when `true`, files go to `<folder>/<camera ?? "Unknown">/`.
     ///   - dateFormat: token format for the date prefix of new folders.
     ///   - separator: what goes between date and title of new folders.
     public static func plan(
         files: [MediaFile],
-        structure: Structure,
         targets: [Day?: FolderTarget],
         destination: URL,
         cameraSubfolders: Bool = false,
@@ -92,31 +88,19 @@ public enum TransferPlanner {
         separator: String = FolderNaming.defaultSeparator,
         calendar: Calendar = .current
     ) -> TransferPlan {
-        let groups = DayGrouping.group(files, calendar: calendar)
-        switch structure {
-        case .folderPerDay:
-            return plan(
-                groups: groups.map { PlanGroup(day: $0.day, target: targets[$0.day] ?? .new(title: ""), files: $0.files) },
-                destination: destination,
-                cameraSubfolders: cameraSubfolders,
-                dateFormat: dateFormat,
-                separator: separator
-            )
-        case .oneFolder:
-            let firstDay = groups.first?.day
-            let target = targets[firstDay] ?? targets[nil] ?? .new(title: "")
-            return plan(
-                groups: [PlanGroup(day: firstDay, target: target, files: groups.flatMap(\.files))],
-                destination: destination,
-                cameraSubfolders: cameraSubfolders,
-                dateFormat: dateFormat,
-                separator: separator
-            )
-        }
+        plan(
+            groups: DayGrouping.group(files, calendar: calendar).map {
+                PlanGroup(day: $0.day, target: targets[$0.day] ?? .new(title: ""), files: $0.files)
+            },
+            destination: destination,
+            cameraSubfolders: cameraSubfolders,
+            dateFormat: dateFormat,
+            separator: separator
+        )
     }
 
     /// Build the copy jobs from groups the caller already formed — one day, one part of a
-    /// split day, or everything for one folder. Groups that resolve to the same folder
+    /// split day, or several days in one folder. Groups that resolve to the same folder
     /// (two parts given the same title) share it; empty groups are dropped.
     public static func plan(
         groups: [PlanGroup],

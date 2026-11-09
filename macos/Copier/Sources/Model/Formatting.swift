@@ -25,6 +25,18 @@ enum Format {
         return date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).year())
     }
 
+    /// `Sat 7 Nov` — the list's month headers carry the year.
+    static func shortDay(_ day: Day?) -> String {
+        guard let day, let date = day.startOfDay() else { return "No date" }
+        return date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
+    }
+
+    /// `November 2026`.
+    static func month(_ day: Day?) -> String {
+        guard let day, let date = day.startOfDay() else { return "No date" }
+        return date.formatted(.dateTime.month(.wide).year())
+    }
+
     /// `09:12`.
     static func time(_ date: Date?) -> String {
         guard let date else { return "—" }

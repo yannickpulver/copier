@@ -12,6 +12,8 @@ struct FolderField: View {
     @State private var showsPicker = false
 
     private var key: ShootKey { ShootKey(day: day.day, block: block) }
+    /// The day a new folder is dated after: a joined day takes its group's first day.
+    private var folderDay: Day? { block == nil ? model.folderDay(for: day) : day.day }
     private var target: FolderTarget { model.target(for: key) }
 
     private var titleBinding: Binding<String> {
@@ -32,7 +34,7 @@ struct FolderField: View {
 
             switch target {
             case .new:
-                Text(model.datePrefix(for: day.day))
+                Text(model.datePrefix(for: folderDay))
                     .font(Theme.mono)
                     .foregroundStyle(.secondary)
                     .fixedSize()
@@ -61,7 +63,7 @@ struct FolderField: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Choose existing folder")
             .popover(isPresented: $showsPicker, arrowEdge: .bottom) {
-                FolderPicker(model: model, day: day, key: key, isPresented: $showsPicker)
+                FolderPicker(model: model, day: day, key: key, folderDay: folderDay, isPresented: $showsPicker)
             }
         }
         .padding(.leading, 9)
@@ -81,6 +83,7 @@ private struct FolderPicker: View {
     @Bindable var model: BackupModel
     let day: ReviewDay
     let key: ShootKey
+    let folderDay: Day?
     @Binding var isPresented: Bool
 
     var body: some View {
@@ -93,7 +96,7 @@ private struct FolderPicker: View {
                     Image(systemName: "plus")
                         .font(.system(size: 11, weight: .semibold))
                     Text("New folder").font(Theme.secondary).fontWeight(.semibold)
-                    Text("\(model.datePrefix(for: day.day)) …")
+                    Text("\(model.datePrefix(for: folderDay)) …")
                         .font(Theme.mono)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)

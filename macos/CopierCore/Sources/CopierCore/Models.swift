@@ -114,14 +114,6 @@ extension BackupError: LocalizedError {
 
 // MARK: - Folder model
 
-/// How the selected files are laid out at the destination.
-public enum Structure: String, Sendable, Codable, CaseIterable {
-    /// One folder per capture day.
-    case folderPerDay
-    /// Everything into a single folder, dated after the first day.
-    case oneFolder
-}
-
 /// Where the files of one day go: a folder to create, or a folder that already exists.
 public enum FolderTarget: Sendable, Hashable {
     /// Create `<date> - <title>` (or just `<date>` when the title is empty).
