@@ -207,3 +207,97 @@ public struct SyncCopyResult: Sendable {
         self.cancelled = cancelled
     }
 }
+
+// MARK: - Through the Synology API
+
+extension FolderSync {
+    /// The NAS path of a folder on an SMB mount, e.g. `/Volumes/yannick/Photos` mounted
+    /// from `smb://yannick@cube/yannick` → `/yannick/Photos`. `nil` when the folder does
+    /// not exist or is not on an SMB mount.
+    public static func nasPath(of url: URL) -> String? {
+        guard let values = try? url.resourceValues(forKeys: [.volumeURLKey, .volumeURLForRemountingKey]),
+              let volume = values.volume,
+              let remount = values.volumeURLForRemounting
+        else { return nil }
+        return nasPath(localPath: url.path, volumePath: volume.path, remountURL: remount)
+    }
+
+    static func nasPath(localPath: String, volumePath: String, remountURL: URL) -> String? {
+        guard remountURL.scheme?.lowercased() == "smb" else { return nil }
+        let share = SyncTarget.trimTrailingSlashes(remountURL.path)
+        let volume = SyncTarget.trimTrailingSlashes(volumePath)
+        let local = SyncTarget.trimTrailingSlashes(localPath)
+        guard !share.isEmpty, local == volume || local.hasPrefix(volume + "/") else { return nil }
+        return share + local.dropFirst(volume.count)
+    }
+
+    /// `true` when `browser` sees the same entries in `nasFolder` as the file system in
+    /// `localFolder` — the mount and the API point at the same NAS. The host names
+    /// can't tell: the mount may say `cube` while Settings has a Tailscale IP.
+    public static func sameEntries(nasFolder: String, localFolder: URL, browser: any FolderBrowser) async -> Bool {
+        guard let listing = try? await browser.list(nasFolder),
+              let local = try? FileManager.default.contentsOfDirectory(atPath: localFolder.path)
+        else { return false }
+        let remote = listing.files.map(\.name) + listing.subfolders.map { ($0.path as NSString).lastPathComponent }
+        return Set(remote.filter(isWalked).map(mountName)) == Set(local.filter(isWalked))
+    }
+
+    /// Walk a NAS folder through `browser` instead of its mount. Unchanged folders come
+    /// from `cacheFile`. The files keep their mount URLs under `localRoot`, so tags and
+    /// copies still go through the mount.
+    public static func walk(
+        nasRoot: String,
+        localRoot: URL,
+        browser: any FolderBrowser,
+        cacheFile: URL? = nil,
+        progress: (@Sendable (ScanProgress) -> Void)? = nil
+    ) async throws -> [SyncFile] {
+        let root = SyncTarget.trimTrailingSlashes(nasRoot)
+        let index = try await FolderWalk.index(roots: [root], browser: browser, cacheFile: cacheFile, progress: progress)
+        var files: [SyncFile] = []
+        for (key, folders) in index.entries where isWalked(key.name) {
+            for folder in folders {
+                let relativeFolder = folder.path.dropFirst(root.count).drop(while: { $0 == "/" })
+                let name = mountName(key.name)
+                let relativePath = relativeFolder.isEmpty ? name : "\(mountName(String(relativeFolder)))/\(name)"
+                files.append(
+                    SyncFile(
+                        relativePath: relativePath,
+                        url: localRoot.appendingPathComponent(relativePath),
+                        name: name,
+                        size: key.size
+                    )
+                )
+            }
+        }
+        return files.sorted { $0.relativePath < $1.relativePath }
+    }
+
+    /// A NAS name as the Mac's SMB mount shows it. The SMB client stores characters SMB
+    /// does not allow (`:`, `*`, `?` …) as private-use characters (the "SFM" mapping,
+    /// U+F001–U+F029), and the API returns them as stored: `Walk w: Steven` on the mount
+    /// is `Walk w\u{F022} Steven` on the NAS.
+    static func mountName(_ name: String) -> String {
+        let mapped: [Character: Character] = [
+            "\u{F020}": "\"", "\u{F021}": "*", "\u{F022}": ":", "\u{F023}": "<", "\u{F024}": ">",
+            "\u{F025}": "?", "\u{F026}": "\\", "\u{F027}": "|", "\u{F028}": " ", "\u{F029}": ".",
+        ]
+        guard name.unicodeScalars.contains(where: { (0xF001...0xF029).contains($0.value) }) else { return name }
+        var scalars = String.UnicodeScalarView()
+        for scalar in name.unicodeScalars {
+            if (0xF001...0xF01F).contains(scalar.value), let control = Unicode.Scalar(scalar.value - 0xF000) {
+                scalars.append(control)
+            } else if let replacement = mapped[Character(scalar)] {
+                scalars.append(contentsOf: replacement.unicodeScalars)
+            } else {
+                scalars.append(scalar)
+            }
+        }
+        return String(scalars)
+    }
+
+    /// Entries a NAS walk keeps: no dot-files, NAS system folders or stale partials.
+    private static func isWalked(_ name: String) -> Bool {
+        !Matcher.isIgnored(directoryName: name) && !name.hasSuffix(TransferService.partialSuffix)
+    }
+}
