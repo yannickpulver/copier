@@ -132,7 +132,11 @@ private struct DayList: View {
                     }
                 }
                 if !settled.isEmpty {
-                    BackedUpDaysRow(days: settled, isOpen: $showsBackedUpDays)
+                    BackedUpRow(
+                        what: "\(settled.count) day\(settled.count == 1 ? "" : "s")",
+                        files: settled.reduce(0) { $0 + $1.files.count },
+                        isOpen: $showsBackedUpDays
+                    )
                         .padding(.top, 4)
                     if showsBackedUpDays {
                         ForEach(settled) { day in
@@ -351,6 +355,9 @@ private struct DayDetail: View {
     @Bindable var model: BackupModel
     let day: ReviewDay
 
+    /// Runs of backed-up shoots the user opened, by their first shoot's id.
+    @State private var openRuns: Set<String> = []
+
     private var isSettled: Bool { model.isBackedUpOnly(day) }
 
     var body: some View {
@@ -360,12 +367,63 @@ private struct DayDetail: View {
                 folder
                     .padding(.bottom, 4)
                 let isSplit = model.isSplit(day) && !isSettled
-                ForEach(Array(day.clusters.enumerated()), id: \.element.id) { block, cluster in
-                    ShootSection(model: model, day: day, cluster: cluster, block: isSplit ? block : nil)
+                ForEach(items) { item in
+                    switch item {
+                    case let .shoot(block, cluster):
+                        ShootSection(model: model, day: day, cluster: cluster, block: isSplit ? block : nil)
+                    case let .backedUp(id, shoots):
+                        BackedUpRow(
+                            what: "\(shoots.count) shoot\(shoots.count == 1 ? "" : "s")",
+                            files: shoots.reduce(0) { $0 + $1.cluster.files.count },
+                            isOpen: Binding(
+                                get: { openRuns.contains(id) },
+                                set: { if $0 { openRuns.insert(id) } else { openRuns.remove(id) } }
+                            )
+                        )
+                        if openRuns.contains(id) {
+                            ForEach(shoots, id: \.cluster.id) { shoot in
+                                ShootSection(model: model, day: day, cluster: shoot.cluster, block: isSplit ? shoot.block : nil)
+                            }
+                        }
+                    }
                 }
             }
             .padding(16)
         }
+    }
+
+    private enum Item: Identifiable {
+        case shoot(block: Int, cluster: FileCluster)
+        /// Shoots in a row with nothing new, folded into one line.
+        case backedUp(id: String, shoots: [(block: Int, cluster: FileCluster)])
+
+        var id: String {
+            switch self {
+            case let .shoot(_, cluster): cluster.id
+            case let .backedUp(id, _): "backed-up-\(id)"
+            }
+        }
+    }
+
+    /// The day's shoots in time order; on a day with something new, each run of shoots
+    /// that are all backed up folds into one line.
+    private var items: [Item] {
+        var items: [Item] = []
+        var run: [(block: Int, cluster: FileCluster)] = []
+        func flush() {
+            if let first = run.first { items.append(.backedUp(id: first.cluster.id, shoots: run)) }
+            run = []
+        }
+        for (block, cluster) in day.clusters.enumerated() {
+            if !isSettled, !cluster.files.contains(where: { $0.reason == .new || model.isTicked($0) }) {
+                run.append((block, cluster))
+            } else {
+                flush()
+                items.append(.shoot(block: block, cluster: cluster))
+            }
+        }
+        flush()
+        return items
     }
 
     private var header: some View {
@@ -456,9 +514,11 @@ private struct DayDetail: View {
     }
 }
 
-/// `› 4 days already backed up · 68 files` — folds the days with nothing to copy.
-private struct BackedUpDaysRow: View {
-    let days: [ReviewDay]
+/// `› 4 days already backed up · 68 files` — folds what has nothing to copy.
+private struct BackedUpRow: View {
+    /// What is folded, e.g. `4 days` or `8 shoots`.
+    let what: String
+    let files: Int
     @Binding var isOpen: Bool
 
     var body: some View {
@@ -468,7 +528,7 @@ private struct BackedUpDaysRow: View {
             HStack(spacing: 8) {
                 Image(systemName: isOpen ? "chevron.down" : "chevron.right")
                     .font(.system(size: 10, weight: .bold))
-                Text("\(days.count) day\(days.count == 1 ? "" : "s") already backed up · \(Format.count(files)) file\(files == 1 ? "" : "s")")
+                Text("\(what) already backed up · \(Format.count(files)) file\(files == 1 ? "" : "s")")
                     .font(Theme.secondary)
                 Spacer(minLength: 0)
             }
@@ -479,8 +539,6 @@ private struct BackedUpDaysRow: View {
         }
         .buttonStyle(.plain)
     }
-
-    private var files: Int { days.reduce(0) { $0 + $1.files.count } }
 }
 
 /// `● 112 photos  ● 36 videos` — the colours match the row badges.

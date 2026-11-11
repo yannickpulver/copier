@@ -396,6 +396,33 @@ struct BackupModelTests {
         #expect(model.tickedCount == 2)
     }
 
+    @Test("a scan ticks the rest of the day the last backup stopped in, which continues its folder")
+    func ticksRestOfLastBackupDay() async throws {
+        let fixture = try Fixture(days: [
+            // 10:00 new but older than the backup, 10:01 backed up, 10:02 new.
+            ("2026-09-18", [("IMG_0001.JPG", 1000), ("IMG_0002.JPG", 1000), ("IMG_0003.JPG", 1000)]),
+            ("2026-09-19", [("IMG_0004.JPG", 1000)]),
+        ])
+        defer { fixture.remove() }
+        // The last backup went to a trip folder that started earlier.
+        let library = fixture.root.appendingPathComponent("library/2026.09.16 - Trip")
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        let trip = fixture.destination.appendingPathComponent("2026.09.16 - Trip")
+        try FileManager.default.createDirectory(at: trip, withIntermediateDirectories: true)
+        let model = makeModel(fixture, sources: [FilesBackedUp(folder: library, names: ["IMG_0002.JPG"])])
+        await model.refreshCards()
+        model.startScan()
+        try await wait(for: model, until: isReview)
+
+        let lastDay = model.days[0]
+        #expect(model.tickedCount == 2)
+        #expect(model.isTicked(lastDay.files[0]) == false)
+        #expect(model.isTicked(lastDay.files[2]))
+        #expect(model.isSinceLastBackupTicked)
+        #expect(model.target(for: lastDay) == .existing(trip))
+        #expect(model.continuedDayIDs == ["2026-09-18", "2026-09-19"])
+    }
+
     @Test("Camera subfolders split the jobs per camera folder")
     func cameraSubfolders() async throws {
         let fixture = try Fixture(days: Self.twoDays)
