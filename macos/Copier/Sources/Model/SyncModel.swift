@@ -279,7 +279,10 @@ final class SyncModel {
         let total = sourcesSnapshot.count
         phase = .comparing(Self.stepText("Source", 0, total))
 
+        let settings = self.settings
         work = Task.detached { [weak self] in
+            let nas = await NASTargetReader.connect(settings: settings, destinations: destinations)
+            defer { if let nas { Task { await nas.client.logout() } } }
             var collected: [SourceResult] = []
             for index in sourcesSnapshot.indices {
                 let source = sourcesSnapshot[index]
@@ -289,16 +292,28 @@ final class SyncModel {
                     let sourceFiles = try await FolderSync.walk(source)
                     if Task.isCancelled { return }
                     await MainActor.run { self?.phase = .comparing(Self.stepText("Target", index, total)) }
-                    let targetFiles = (try? await FolderSync.walk(destination)) ?? []
+                    let targetFiles: [SyncFile]
+                    if let viaNAS = try await nas?.walk(destination) {
+                        targetFiles = viaNAS
+                    } else {
+                        targetFiles = (try? await FolderSync.walk(destination)) ?? []
+                    }
                     let result = FolderSync.diff(source: sourceFiles, destination: targetFiles)
 
                     var updates: [TagUpdate] = []
                     if syncTags {
                         await MainActor.run { self?.phase = .comparing(Self.stepText("Tags", index, total)) }
                         // Both trees were just walked — read the tags of those files instead
-                        // of walking everything a second time.
+                        // of walking everything a second time. In the target only the
+                        // counterparts of tagged source files matter.
                         let sourceTags = FinderTags.read(urls: sourceFiles.map(\.url))
-                        let targetTags = FinderTags.read(urls: targetFiles.map(\.url))
+                        let targetTags = FinderTags.read(
+                            urls: TagPlanner.destinationsToRead(
+                                diff: result,
+                                sourceTags: sourceTags,
+                                destinationRoot: destination
+                            )
+                        )
                         updates = TagPlanner.updates(
                             for: result.present,
                             sourceTags: sourceTags,
@@ -510,5 +525,40 @@ private final class CopyTickTracker: @unchecked Sendable {
         defer { lock.unlock() }
         bytesDone += chunk
         return (self.filesDone, self.currentFile, self.bytesDone)
+    }
+}
+
+/// Reads Folder Sync targets on an SMB mount of the Synology through its API: one
+/// request per folder instead of one per file, and unchanged folders from the cache.
+/// Copies and tags still go through the mount.
+struct NASTargetReader: Sendable {
+    let client: SynologyClient
+    let cachePrefix: String
+
+    /// A logged-in reader when one of `destinations` is on an SMB mount and the NAS
+    /// credentials in Settings work, else `nil`.
+    static func connect(settings: SettingsStore, destinations: [URL]) async -> NASTargetReader? {
+        guard destinations.contains(where: { FolderSync.nasPath(of: $0) != nil }),
+              let config = try? await CredentialResolver.makeSynologyConfig(
+                  settings: settings,
+                  requireFolders: false
+              ).get()
+        else { return nil }
+        let client = SynologyClient(config: config)
+        guard (try? await client.login()) != nil else { return nil }
+        return NASTargetReader(client: client, cachePrefix: "sync-synology-\(config.host)-\(config.port)-\(config.user)")
+    }
+
+    /// The files under `destination`, or `nil` when it is not a folder on this NAS.
+    func walk(_ destination: URL) async throws -> [SyncFile]? {
+        guard let nasRoot = FolderSync.nasPath(of: destination),
+              await FolderSync.sameEntries(nasFolder: nasRoot, localFolder: destination, browser: client)
+        else { return nil }
+        return try await FolderSync.walk(
+            nasRoot: nasRoot,
+            localRoot: destination,
+            browser: client,
+            cacheFile: FolderCache.fileURL(name: cachePrefix + nasRoot)
+        )
     }
 }

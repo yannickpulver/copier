@@ -127,6 +127,24 @@ public enum TagPlanner {
         }
     }
 
+    /// The destination files whose tags ``updates(for:sourceTags:destinationTags:)`` and
+    /// ``copyUpdates(for:sourceTags:destinationTags:destinationRoot:)`` look at: only the
+    /// counterparts of tagged source files. Over SMB every tag read is a round trip, and
+    /// most files carry no tags. Missing files have no counterpart yet.
+    public static func destinationsToRead(
+        diff: SyncDiff,
+        sourceTags: [URL: [String]],
+        destinationRoot: URL
+    ) -> [URL] {
+        let present = diff.present
+            .filter { sourceTags[$0.source.url]?.isEmpty == false }
+            .map(\.destination.url)
+        let replaced = diff.different
+            .filter { sourceTags[$0.url]?.isEmpty == false }
+            .map { destinationRoot.appendingPathComponent($0.relativePath) }
+        return present + replaced
+    }
+
     /// Updates for files about to be copied: the copy starts untagged, so merge the
     /// source tags with whatever the destination path already had at scan time.
     public static func copyUpdates(
