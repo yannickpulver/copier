@@ -715,15 +715,17 @@ final class BackupModel {
     static let tripGap = 3
 
     /// The folder the last backup went to, when it exists at the destination, and the new
-    /// days that follow that backup without a gap longer than ``tripGap`` days.
+    /// days that follow that backup without a gap longer than ``tripGap`` days — including
+    /// the day it stopped in, when that day has new files after it.
     private var continuationFolder: (folder: URL, dayIDs: Set<String>)? {
         guard let destination,
-              let index = days.lastIndex(where: { $0.day != nil && $0.backedUpCount > 0 }),
+              let (index, laterFiles) = lastBackup,
               let name = days[index].places.first?.folder.lastPathComponent,
               existingFolderNames.contains(name)
         else { return nil }
         var previous = days[index].day
         var ids: Set<String> = []
+        if !laterFiles.isEmpty, !separatedDayIDs.contains(days[index].id) { ids.insert(days[index].id) }
         for day in days[(index + 1)...] where !day.newFiles.isEmpty {
             guard let current = day.day, let last = previous,
                   Self.daysBetween(last, current) <= Self.tripGap else { break }
@@ -804,11 +806,21 @@ final class BackupModel {
     /// `true` once a day on the card has files that are backed up already.
     var hasBackedUpDays: Bool { days.contains { $0.day != nil && $0.backedUpCount > 0 } }
 
-    /// The new files of the days after the last day with backed-up files; every new
-    /// file when nothing is backed up yet. What a scan ticks first.
+    /// The last day with backed-up files, and its new files taken after the newest
+    /// backed-up one: the rest of the day the last backup stopped in.
+    private var lastBackup: (index: Int, laterFiles: [ReviewFile])? {
+        guard let index = days.lastIndex(where: { $0.day != nil && $0.backedUpCount > 0 }) else { return nil }
+        let files = days[index].files
+        let cut = files.lastIndex { $0.reason == .backedUp }.map { $0 + 1 } ?? files.endIndex
+        return (index, files[cut...].filter { $0.reason == .new })
+    }
+
+    /// The new files taken after the newest backed-up file; every new file when nothing
+    /// is backed up yet. What a scan ticks first.
     private var sinceLastBackupIDs: Set<URL> {
-        let start = days.lastIndex { $0.day != nil && $0.backedUpCount > 0 }.map { $0 + 1 } ?? 0
-        return Set(days[start...].flatMap(\.newFiles).map(\.id))
+        guard let lastBackup else { return Set(days.flatMap(\.newFiles).map(\.id)) }
+        let later = lastBackup.laterFiles + days[(lastBackup.index + 1)...].flatMap(\.newFiles)
+        return Set(later.map(\.id))
     }
 
     /// `true` when exactly the files since the last backup are ticked.
