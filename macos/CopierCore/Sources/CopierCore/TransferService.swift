@@ -383,10 +383,16 @@ public struct TransferService: FileTransferring, Sendable {
                     cleanUp()
                     throw BackupError.cancelled
                 }
-                let chunk = try input.read(upToCount: chunkSize) ?? Data()
-                if chunk.isEmpty { break }
-                try output.write(contentsOf: chunk)
-                onBytes?(Int64(chunk.count))
+                // FileHandle hands out autoreleased buffers, and this loop never returns
+                // to a pool: without draining per chunk, a file's memory stays held until
+                // it is fully copied (a 20 GB video → 20 GB of RAM).
+                let written = try autoreleasepool { () -> Int in
+                    let chunk = try input.read(upToCount: chunkSize) ?? Data()
+                    if !chunk.isEmpty { try output.write(contentsOf: chunk) }
+                    return chunk.count
+                }
+                if written == 0 { break }
+                onBytes?(Int64(written))
             }
             try output.close()
 
