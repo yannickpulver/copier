@@ -530,7 +530,8 @@ struct BackupModelTests {
         #expect(model.tickedCount == 0)
         #expect(model.days.flatMap(\.files).allSatisfy { $0.reason != .new })
         #expect(model.reviewSubtitle.contains("backed up"))
-        #expect(model.selectedDayID == "2026-09-19")
+        // No day opens, so the preview says everything is backed up.
+        #expect(model.selectedDayID == nil)
     }
 
     @Test("A backup copies the ticked files and finishes")

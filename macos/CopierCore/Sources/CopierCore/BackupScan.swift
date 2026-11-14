@@ -247,12 +247,15 @@ public struct BackupScan: Sendable {
             }
             return SourceResult(name: name, kind: source.kind, index: index, succeeded: true)
         } catch {
+            // Just the reason: the banner already says the source was not checked.
+            var reason = error.localizedDescription
+            if case let BackupError.sourceUnavailable(_, unavailable) = error { reason = unavailable }
             return SourceResult(
                 name: name,
                 kind: source.kind,
                 index: LocationIndex(),
                 succeeded: false,
-                errorDescription: error.localizedDescription
+                errorDescription: reason
             )
         }
     }

@@ -374,6 +374,12 @@ final class BackupModel {
     /// The day the preview shows.
     var selectedDay: ReviewDay? { selectedDayID.flatMap(day(withID:)) }
 
+    /// The newest day with something to copy; none when everything is backed up, so the
+    /// preview shows that instead of a day's files.
+    func selectDefaultDay() {
+        selectedDayID = orderedDays.first { !isBackedUpOnly($0) }?.id
+    }
+
     /// The folder a whole day goes into, as it will be named.
     func folderName(for day: ReviewDay) -> String {
         folderName(for: folderDay(for: day), target: target(for: day))
@@ -665,8 +671,7 @@ final class BackupModel {
         // Folders sorted on the card already say how the day splits.
         splitDayIDs = Set(days.filter { canSplit($0) && $0.clusters.contains { $0.title != nil } }.map(\.id))
         rebuildDayOrder()
-        // The preview opens on the newest day with something to copy.
-        selectedDayID = orderedDays.first?.id
+        selectDefaultDay()
         rebuildTargets()
         autoEnableCameraSubfolders()
         phase = .review
