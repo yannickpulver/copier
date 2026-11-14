@@ -28,14 +28,10 @@ struct ReviewView: View {
                 ForEach(model.failedSources, id: \.name) { source in
                     InlineBanner(
                         kind: .warning,
-                        message: "\(source.name) was not checked — \(source.errorDescription ?? "no connection"). Files stored there look new.",
+                        message: "\(source.name) was not checked — \(reason(source)). Files stored there look new.",
                         actionTitle: "Retry",
                         action: { model.startScan() }
                     )
-                }
-
-                if model.allBackedUp {
-                    allBackedUpNotice
                 }
             }
             .padding(.horizontal, 16)
@@ -50,6 +46,8 @@ struct ReviewView: View {
                 if let day = model.selectedDay {
                     DayDetail(model: model, day: day)
                         .id(day.id)
+                } else if model.allBackedUp {
+                    AllBackedUp(model: model)
                 } else {
                     Text("Pick a day on the left.")
                         .font(Theme.secondary)
@@ -72,24 +70,41 @@ struct ReviewView: View {
         }
     }
 
-    private var allBackedUpNotice: some View {
-        GroupedBox {
-            HStack(spacing: 12) {
-                Image(systemName: "checkmark.circle")
-                    .font(.system(size: 20))
-                    .foregroundStyle(Theme.success)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Everything on this card is already backed up")
-                        .font(Theme.bodySemibold)
-                    Text("Tick files to copy them again.")
-                        .font(Theme.secondary)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 8)
-                Button("Eject card") { model.ejectCard() }
+    private func reason(_ source: SourceResult) -> String {
+        let reason = source.errorDescription ?? "no connection"
+        return reason.hasSuffix(".") ? String(reason.dropLast()) : reason
+    }
+}
+
+/// The preview when the card holds nothing new: says so plainly and offers the eject.
+private struct AllBackedUp: View {
+    let model: BackupModel
+
+    var body: some View {
+        let files = model.days.reduce(0) { $0 + $1.files.count }
+        let days = model.days.filter { $0.day != nil }.count
+        VStack(spacing: 14) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 48))
+                .foregroundStyle(Theme.success)
+            VStack(spacing: 4) {
+                Text("Everything is backed up")
+                    .font(.system(size: 20, weight: .semibold))
+                Text("All \(Format.count(files)) files\(days > 1 ? " from \(days) days" : "") on this card are already in your backups.")
+                    .font(Theme.secondary)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
             }
-            .padding(12)
+            Button("Eject card") { model.ejectCard() }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .padding(.top, 4)
+            Text("To copy files again, open a day under “already backed up”.")
+                .font(.system(size: 11))
+                .foregroundStyle(.tertiary)
         }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -138,6 +153,12 @@ private struct DayList: View {
                         isOpen: $showsBackedUpDays
                     )
                         .padding(.top, 4)
+                        .onChange(of: showsBackedUpDays) { _, isOpen in
+                            // Folding the days away also closes the one shown from them.
+                            if !isOpen, let day = model.selectedDay, model.isBackedUpOnly(day) {
+                                model.selectDefaultDay()
+                            }
+                        }
                     if showsBackedUpDays {
                         ForEach(settled) { day in
                             DayRow(model: model, day: day, isSettled: true)
