@@ -41,6 +41,27 @@ struct SettingsModelTests {
         }
     }
 
+    @Test("removeNAS forgets login and folders")
+    func removeNASClearsEverything() {
+        let (model, store, _) = makeModel()
+        #expect(model.hasNAS == false)
+
+        model.synologyHost = "nas.local"
+        model.synologyUser = "yannick"
+        model.synologyPassword = "op://Private/Synology/password"
+        model.addSynologyFolder("/photo")
+        model.commitEdits()
+        #expect(model.hasNAS)
+
+        model.removeNAS()
+
+        #expect(model.hasNAS == false)
+        #expect(model.isNASConfigured == false)
+        #expect(store.synologyHost?.isEmpty ?? true)
+        #expect(store.synologyPassword == nil)
+        #expect(store.synologyFolders.isEmpty)
+    }
+
     @Test("commitEdits flushes host, user and password together")
     func commitFlushesEverything() {
         let (model, store, _) = makeModel()

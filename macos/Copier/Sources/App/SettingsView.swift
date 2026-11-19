@@ -9,32 +9,49 @@ enum SettingsChapter: CaseIterable, Hashable {
     case general
 }
 
-/// The Settings screen in the main window: one page, grouped by task. Backup says
-/// where files go and how folders are named, Duplicate check where existing backups
-/// are looked up, General the rest.
+/// Pages Settings pushes on top of itself.
+enum SettingsPage: Hashable {
+    case synology
+}
+
+/// The Settings screen in the main window: one page, grouped by task. SD Backup says
+/// where files go, how folders are named and where existing backups are looked up,
+/// General the rest. The Synology NAS has its own page.
 struct SettingsView: View {
     @Bindable var model: SettingsModel
     @Bindable var router: AppRouter
     @Bindable var updater: Updater
 
+    @State private var path: [SettingsPage] = []
+
     var body: some View {
-        ScrollViewReader { proxy in
-            Form {
-                BackupChapter(model: model)
-                DuplicateCheckChapter(model: model, router: router)
-                GeneralChapter(model: model, updater: updater)
-            }
-            .formStyle(.grouped)
-            .onChange(of: router.settingsChapter, initial: true) { _, chapter in
-                guard let chapter else { return }
-                // Wait one turn so a page that was just opened has laid out its rows.
-                Task {
-                    withAnimation { proxy.scrollTo(chapter, anchor: .top) }
-                    router.settingsChapter = nil
+        NavigationStack(path: $path) {
+            ScrollViewReader { proxy in
+                Form {
+                    DuplicateCheckChapter(model: model, router: router)
+                    BackupChapter(model: model)
+                    GeneralChapter(model: model, updater: updater)
+                }
+                .formStyle(.grouped)
+                .onChange(of: router.settingsChapter, initial: true) { _, chapter in
+                    guard let chapter else { return }
+                    // Wait one turn so a page that was just opened has laid out its rows.
+                    Task {
+                        if chapter == .nas {
+                            path = [.synology]
+                        } else {
+                            path = []
+                            withAnimation { proxy.scrollTo(chapter, anchor: .top) }
+                        }
+                        router.settingsChapter = nil
+                    }
                 }
             }
+            .navigationTitle("Settings")
+            .navigationDestination(for: SettingsPage.self) { _ in
+                SynologySettingsView(model: model) { path = [] }
+            }
         }
-        .navigationTitle("Settings")
     }
 }
 
@@ -111,9 +128,160 @@ private struct BackupChapter: View {
                 }
             }
         } header: {
-            ChapterHeader(title: "Backup", section: "Back up to")
+            Text("Copy to")
+        } footer: {
+            Text("You can also add one right before copying, in the destination menu at the bottom of the review.")
+                .font(Theme.secondary)
+                .foregroundStyle(.secondary)
         }
         .id(SettingsChapter.backup)
+    }
+}
+
+// MARK: - Check locations (still part of SD Backup)
+
+private struct DuplicateCheckChapter: View {
+    @Bindable var model: SettingsModel
+    var router: AppRouter
+
+    var body: some View {
+        Section {
+            if model.hasNAS {
+                NavigationLink(value: SettingsPage.synology) { nasRow }
+            }
+            ForEach(Array(model.checkPaths.enumerated()), id: \.element.path) { index, path in
+                HStack(spacing: 10) {
+                    Image(systemName: "externaldrive").foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(path.label).font(Theme.body)
+                        Text(path.path)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    Spacer(minLength: 8)
+                    // Without a NAS there is nothing to fall back from.
+                    if model.isNASConfigured {
+                        Toggle(
+                            "Only if NAS fails",
+                            isOn: Binding(
+                                get: { path.fallbackOnly },
+                                set: { model.setFallbackOnly($0, at: index) }
+                            )
+                        )
+                        .toggleStyle(.checkbox)
+                        .font(Theme.secondary)
+                    }
+                    Button {
+                        model.removeCheckPaths(at: IndexSet(integer: index))
+                    } label: {
+                        Image(systemName: "minus.circle")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            HStack(spacing: 20) {
+                AddRow(title: "Add folder") {
+                    if let url = FolderPanel.chooseFolder(title: "Choose a folder to check") {
+                        model.addCheckPath(url)
+                    }
+                }
+                .fixedSize()
+                if !model.hasNAS {
+                    AddRow(title: "Add Synology NAS") { router.openSettings(.nas) }
+                        .fixedSize()
+                }
+                Spacer(minLength: 0)
+            }
+        } header: {
+            ChapterHeader(title: "SD Backup", section: "Check locations")
+        } footer: {
+            Text("Files found here are skipped. Any NAS works as a folder (its mounted share). A Synology NAS can also be checked over its API, which is faster.")
+                .font(Theme.secondary)
+                .foregroundStyle(.secondary)
+        }
+        .id(SettingsChapter.duplicateCheck)
+    }
+
+    /// The NAS as a list entry that opens its page: host and folders once set up.
+    private var nasRow: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "externaldrive.connected.to.line.below")
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Synology NAS").font(Theme.body)
+                if model.isNASConfigured {
+                    Text(nasDetail)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .help(nasTooltip)
+                }
+            }
+            Spacer(minLength: 8)
+            if isConnected {
+                Label {
+                    Text("Connected")
+                        .font(Theme.secondary)
+                        .foregroundStyle(.secondary)
+                } icon: {
+                    Circle()
+                        .fill(Theme.success)
+                        .frame(width: 7, height: 7)
+                }
+                .labelStyle(.titleAndIcon)
+            } else if !model.isNASConfigured {
+                Text("Login missing")
+                    .font(Theme.secondary)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var isConnected: Bool {
+        if case .ok = model.connection { return true }
+        return false
+    }
+
+    /// Host plus either the single folder or a count — a joined list truncates in the
+    /// middle and becomes unreadable ("/yannick/Pho…026").
+    private var nasDetail: String {
+        let folders = model.synologyFolders
+        switch folders.count {
+        case 0: return model.synologyHost
+        case 1: return "\(model.synologyHost) · \(folders[0])"
+        default: return "\(model.synologyHost) · \(folders.count) folders"
+        }
+    }
+
+    private var nasTooltip: String {
+        model.synologyFolders.isEmpty
+            ? model.synologyHost
+            : model.synologyHost + "\n" + model.synologyFolders.joined(separator: "\n")
+    }
+}
+
+// MARK: - General
+
+private struct GeneralChapter: View {
+    @Bindable var model: SettingsModel
+    @Bindable var updater: Updater
+
+    var body: some View {
+        Section {
+            Picker("Theme", selection: $model.appearance) {
+                Text("System").tag(Appearance.system)
+                Text("Light").tag(Appearance.light)
+                Text("Dark").tag(Appearance.dark)
+            }
+            .pickerStyle(.segmented)
+            Toggle("Check for updates automatically", isOn: $updater.automaticallyChecksForUpdates)
+        } header: {
+            ChapterHeader(title: "General", section: "App")
+        }
+        .id(SettingsChapter.general)
 
         Section {
             LabeledContent("Date format") {
@@ -146,298 +314,5 @@ private struct BackupChapter: View {
             }
             .font(Theme.secondary)
         }
-    }
-}
-
-// MARK: - Duplicate check
-
-private struct DuplicateCheckChapter: View {
-    @Bindable var model: SettingsModel
-    var router: AppRouter
-    @State private var newFolder = ""
-    @State private var showsBrowser = false
-    @FocusState private var focusedField: Field?
-
-    private enum Field: Hashable {
-        case host, port, user, password
-    }
-
-    var body: some View {
-        Section {
-            nasRow
-            ForEach(Array(model.checkPaths.enumerated()), id: \.element.path) { index, path in
-                HStack(spacing: 10) {
-                    Image(systemName: "externaldrive").foregroundStyle(.secondary)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(path.label).font(Theme.body)
-                        Text(path.path)
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    Spacer(minLength: 8)
-                    Toggle(
-                        "Only if NAS fails",
-                        isOn: Binding(
-                            get: { path.fallbackOnly },
-                            set: { model.setFallbackOnly($0, at: index) }
-                        )
-                    )
-                    .toggleStyle(.checkbox)
-                    .font(Theme.secondary)
-                    Button {
-                        model.removeCheckPaths(at: IndexSet(integer: index))
-                    } label: {
-                        Image(systemName: "minus.circle")
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                }
-            }
-            AddRow(title: "Add folder") {
-                if let url = FolderPanel.chooseFolder(title: "Choose a folder to check") {
-                    model.addCheckPath(url)
-                }
-            }
-        } header: {
-            ChapterHeader(title: "Duplicate check", section: "Look for existing backups in")
-        }
-        .id(SettingsChapter.duplicateCheck)
-
-        Section {
-            TextField("Host", text: $model.synologyHost, prompt: Text("nas.local"))
-                .focused($focusedField, equals: .host)
-            TextField("Port", value: $model.synologyPort, format: .number.grouping(.never))
-                .focused($focusedField, equals: .port)
-            TextField("User", text: $model.synologyUser)
-                .focused($focusedField, equals: .user)
-            HStack(spacing: 8) {
-                // A 1Password reference is not a secret, so show it in the clear.
-                if model.usesPasswordReference {
-                    TextField("Password", text: $model.synologyPassword)
-                        .focused($focusedField, equals: .password)
-                        .font(.system(size: 12, design: .monospaced))
-                    TagChip(text: "1Password reference", accented: true)
-                } else {
-                    SecureField(
-                        "Password",
-                        text: $model.synologyPassword,
-                        prompt: Text("Password or op://… reference")
-                    )
-                    .focused($focusedField, equals: .password)
-                }
-            }
-            Toggle("Use HTTPS", isOn: $model.synologySecure)
-
-            HStack(alignment: .center, spacing: 12) {
-                Button("Test connection") { model.testConnection() }
-                    .disabled(model.connection == .testing || model.connection == .resolving)
-                connectionStatus
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        } header: {
-            Text("Synology NAS")
-        } footer: {
-            Text("The password is stored in your keychain. A 1Password reference like op://Vault/Item/password is read with the 1Password CLI when a scan starts.")
-                .font(Theme.secondary)
-                .foregroundStyle(.secondary)
-        }
-        .id(SettingsChapter.nas)
-        // Committing on every focus change means a test never uses stale text.
-        .onSubmit { model.commitEdits() }
-        .onChange(of: focusedField) { _, _ in model.commitEdits() }
-
-        Section {
-            ForEach(Array(model.synologyFolders.enumerated()), id: \.element) { index, folder in
-                HStack {
-                    Text(folder).font(.system(size: 12, design: .monospaced))
-                    Spacer()
-                    Button {
-                        model.removeSynologyFolders(at: IndexSet(integer: index))
-                    } label: {
-                        Image(systemName: "minus.circle")
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                }
-            }
-            HStack(spacing: 8) {
-                TextField("", text: $newFolder, prompt: Text("Add a folder path, e.g. /photo/2026"))
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: .infinity)
-                    .onSubmit(addFolder)
-                Button("Add", action: addFolder)
-                    .disabled(!isAddable)
-                Button("Browse NAS…") { showsBrowser = true }
-                    .disabled(!model.isNASConfigured)
-                    .popover(isPresented: $showsBrowser, arrowEdge: .bottom) {
-                        NASFolderBrowser(model: model)
-                    }
-                    .help(
-                        model.isNASConfigured
-                            ? "Pick a folder from the NAS."
-                            : "Fill in host, user and password first."
-                    )
-            }
-
-        } header: {
-            Text("NAS folders to index")
-        } footer: {
-            Text("Indexed recursively. Pick the narrowest folders that hold your backups, whole shares are slow.")
-                .font(Theme.secondary)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    /// The NAS is a check location too — it just lives behind the API, so it gets a
-    /// fixed first row here with a link down to its connection settings.
-    private var nasRow: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "externaldrive.connected.to.line.below")
-                .foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Synology NAS").font(Theme.body)
-                if model.isNASConfigured {
-                    Text(nasDetail)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .help(nasTooltip)
-                } else {
-                    Text("Not set up. Check your NAS over its API, faster than a mounted share.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            Spacer(minLength: 8)
-            if model.isNASConfigured {
-                HStack(alignment: .center, spacing: 12) {
-                    Label {
-                        Text(isConnected ? "Connected" : "Configured")
-                            .font(Theme.secondary)
-                            .foregroundStyle(.secondary)
-                    } icon: {
-                        Circle()
-                            .fill(isConnected ? Theme.success : Color.secondary.opacity(0.45))
-                            .frame(width: 7, height: 7)
-                    }
-                    .labelStyle(.titleAndIcon)
-                    Button("Configure…") { router.openSettings(.nas) }
-                        .buttonStyle(.link)
-                        .font(Theme.secondary)
-                }
-            } else {
-                Button("Set up NAS…") { router.openSettings(.nas) }
-                    .buttonStyle(.link)
-                    .font(Theme.secondary)
-            }
-        }
-    }
-
-    private var isConnected: Bool {
-        if case .ok = model.connection { return true }
-        return false
-    }
-
-    /// Host plus either the single folder or a count — a joined list truncates in the
-    /// middle and becomes unreadable ("/yannick/Pho…026").
-    private var nasDetail: String {
-        let folders = model.synologyFolders
-        switch folders.count {
-        case 0: return model.synologyHost
-        case 1: return "\(model.synologyHost) · \(folders[0])"
-        default: return "\(model.synologyHost) · \(folders.count) folders"
-        }
-    }
-
-    private var nasTooltip: String {
-        model.synologyFolders.isEmpty
-            ? model.synologyHost
-            : model.synologyHost + "\n" + model.synologyFolders.joined(separator: "\n")
-    }
-
-    @ViewBuilder
-    private var connectionStatus: some View {
-        switch model.connection {
-        case .resolving:
-            busyStatus("Reading 1Password reference…")
-        case .testing:
-            busyStatus("Testing…")
-        case .ok:
-            VStack(alignment: .leading, spacing: 2) {
-                Label {
-                    Text("Connected.")
-                } icon: {
-                    Image(systemName: "checkmark.circle")
-                }
-                .labelStyle(.titleAndIcon)
-                .imageScale(.medium)
-                .font(Theme.secondary)
-                .foregroundStyle(Theme.success)
-                if model.synologyFolders.isEmpty {
-                    Text("Add at least one shared folder below so the NAS gets checked.")
-                        .font(Theme.secondary)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-        case let .failed(reason):
-            Label {
-                Text(reason)
-                    .fixedSize(horizontal: false, vertical: true)
-            } icon: {
-                Image(systemName: "exclamationmark.triangle")
-            }
-            .labelStyle(.titleAndIcon)
-            .imageScale(.medium)
-            .font(Theme.secondary)
-            .foregroundStyle(Theme.warning)
-        case .idle:
-            EmptyView()
-        }
-    }
-
-    private func busyStatus(_ text: String) -> some View {
-        HStack(alignment: .center, spacing: 8) {
-            ProgressView().controlSize(.small)
-            Text(text)
-                .font(Theme.secondary)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    /// A shared-folder path is absolute, so require the leading slash.
-    private var isAddable: Bool {
-        newFolder.trimmingCharacters(in: .whitespaces).hasPrefix("/")
-    }
-
-    private func addFolder() {
-        guard isAddable else { return }
-        model.addSynologyFolder(newFolder)
-        newFolder = ""
-    }
-}
-
-// MARK: - General
-
-private struct GeneralChapter: View {
-    @Bindable var model: SettingsModel
-    @Bindable var updater: Updater
-
-    var body: some View {
-        Section {
-            Picker("Theme", selection: $model.appearance) {
-                Text("System").tag(Appearance.system)
-                Text("Light").tag(Appearance.light)
-                Text("Dark").tag(Appearance.dark)
-            }
-            .pickerStyle(.segmented)
-            Toggle("Check for updates automatically", isOn: $updater.automaticallyChecksForUpdates)
-        } header: {
-            ChapterHeader(title: "General", section: "App")
-        }
-        .id(SettingsChapter.general)
     }
 }
