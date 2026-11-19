@@ -247,6 +247,23 @@ final class SettingsModel {
         locationsRevision += 1
     }
 
+    /// `true` once anything about a NAS was entered, so Settings shows its sections.
+    var hasNAS: Bool {
+        !synologyHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !synologyUser.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !synologyFolders.isEmpty
+    }
+
+    /// Forgets the NAS: login, password and folders.
+    func removeNAS() {
+        synologyHost = ""
+        synologyUser = ""
+        synologyPassword = ""
+        synologyFolders = []
+        connection = .idle
+        commitEdits()
+    }
+
     /// `true` once the NAS can be talked to at all.
     var isNASConfigured: Bool {
         !synologyHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
